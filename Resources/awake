@@ -1,0 +1,130 @@
+#!/bin/sh
+# awake — ask Sleepwalker to keep the Mac awake and wake (unfreeze) apps.
+#
+#   awake need <app> [minutes]      unfreeze <app> for N minutes (default 10); released when your turn ends
+#   awake done <app>                let <app> freeze again
+#   awake hold <name> [minutes]     keep the Mac awake for N minutes (default 15)
+#   awake release <name>            release a hold
+#   awake run <name> -- <cmd...>    keep awake while <cmd> runs
+#   awake list                      show active holds
+#   awake hook                      used by Claude Code hooks (reads hook JSON on stdin)
+#
+# Holds are files in ~/Library/Application Support/Sleepwalker/leases/<name>
+# containing "<expiry-timestamp> <owner-pid> [app]". Sleepwalker.app watches
+# that folder and drops a hold once it expires or its owner process exits.
+set -e
+DIR="${SLEEPWALKER_LEASES:-$HOME/Library/Application Support/Sleepwalker/leases}"
+LOG="${SLEEPWALKER_HOOK_LOG:-$HOME/Library/Logs/Sleepwalker-hooks.log}"
+mkdir -p "$DIR"
+
+safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
+say() { [ -n "$AWAKE_QUIET" ] || echo "awake: $*"; }
+
+# The `claude` process we're running under (0 if none), so holds die with it.
+owner() {
+    p=$PPID
+    while [ -n "$p" ] && [ "$p" -gt 1 ]; do
+        case "$(ps -o comm= -p "$p" 2>/dev/null)" in *claude*) echo "$p"; return ;; esac
+        p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
+    done
+    echo 0
+}
+
+hold() { # name minutes owner [app]
+    echo "$(( $(date +%s) + ${2:-15} * 60 )) ${3:-0}${4:+ $4}" > "$DIR/$(safe "$1")"
+}
+release() { rm -f "$DIR/$(safe "$1")"; }
+
+need() { # app minutes owner
+    hold "need-$(safe "$1")-$3" "${2:-10}" "$3" "$1"
+}
+release_needs() { # owner
+    for f in "$DIR"/need-*-"$1"; do [ -e "$f" ] && rm -f "$f"; done; return 0
+}
+
+case "$1" in
+    need)
+        [ -n "$2" ] || { echo "usage: awake need <app> [minutes]" >&2; exit 1; }
+        need "$2" "$3" "$(owner)"; say "'$2' is awake for ${3:-10} min" ;;
+    done)
+        [ -n "$2" ] || { echo "usage: awake done <app>" >&2; exit 1; }
+        for f in "$DIR"/need-"$(safe "$2")"-*; do [ -e "$f" ] && rm -f "$f"; done; say "'$2' may freeze again" ;;
+    hold)
+        [ -n "$2" ] || { echo "usage: awake hold <name> [minutes]" >&2; exit 1; }
+        hold "$2" "${3:-15}" 0; say "holding '$2' for ${3:-15} min" ;;
+    release)
+        [ -n "$2" ] || { echo "usage: awake release <name>" >&2; exit 1; }
+        release "$2"; say "released '$2'" ;;
+    run)
+        name="$2"; shift 2; [ "$1" = "--" ] && shift
+        me=$$
+        # Refresh the hold every 5 minutes while the command runs.
+        ( while :; do hold "$name" 10 "$me"; sleep 300; done ) & keeper=$!
+        trap 'kill $keeper 2>/dev/null; release "$name"' EXIT INT TERM
+        "$@" ;;
+    list)
+        now=$(date +%s)
+        for f in "$DIR"/*; do
+            [ -f "$f" ] || continue
+            read -r exp _ app < "$f"; left=$(( (exp - now) / 60 ))
+            [ "$left" -ge 0 ] && echo "$(basename "$f")  ${left} min left${app:+  (app: $app)}"
+        done; true ;;
+    hook)
+        # Claude Code hook. The compiled sleepwalker-hook is ~8x faster; this
+        # shell version is only the fallback.
+        FAST="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../MacOS/sleepwalker-hook"
+        [ -x "$FAST" ] && exec "$FAST"
+        # Hook JSON arrives on stdin:
+        # {"session_id":"...","hook_event_name":"...","tool_name":"...","tool_input":{...}}
+        input=$(cat)
+        field() { printf '%s' "$input" | sed -n "s/.*\"$1\" *: *\"*\([^\",}]*\).*/\1/p" | head -1; }
+        sid=$(field session_id)
+        ev=$(field hook_event_name)
+        tool=$(field tool_name)
+        name="claude-$(printf '%s' "${sid:-unknown}" | cut -c1-8)"
+        own=$(owner)
+
+        { echo "$(date '+%F %T') $name $ev $tool"; } >> "$LOG" 2>/dev/null || true
+        [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 2000 ] && tail -500 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
+
+        if [ "$ev" = "PreToolUse" ]; then
+            # Work that outlives the turn gets its own hold, which Stop does not release.
+            case "$tool" in
+                ScheduleWakeup)
+                    if [ "$(field stop)" = "true" ]; then release "$name-wakeup"
+                    else
+                        delay=$(field delaySeconds); delay=${delay%%.*}
+                        hold "$name-wakeup" $(( (${delay:-1800} + 59) / 60 + 5 )) "$own"
+                    fi ;;
+                CronCreate) hold "$name-cron" 1440 "$own" ;;
+                CronDelete) release "$name-cron" ;;
+                Monitor)    hold "$name-monitor" 60 "$own" ;;
+                Bash) [ "$(field run_in_background)" = "true" ] && hold "$name-bg" 30 "$own" ;;
+            esac
+
+            # Wake the apps this tool call is about to use.
+            case "$tool" in
+                *[Cc]hrome*|*[Bb]rowser*|*[Pp]laywright*|*preview_*) need browser 10 "$own" ;;
+            esac
+            if [ "$tool" = "Bash" ]; then
+                case "$input" in *docker*|*kubectl*) need docker 10 "$own" ;; esac
+                printf '%s' "$input" \
+                    | grep -oE '(tell (application|app) \\"[^\\]+\\"|open -a \\"[^\\]+\\"|open -a [A-Za-z0-9.]+)' \
+                    | sed -E 's/^tell (application|app) \\"//; s/^open -a //; s/\\"//g; s/\\$//' \
+                    | sort -u | while read -r app; do
+                        case "$app" in ""|"System Events"|Finder) ;; *) need "$app" 10 "$own" ;; esac
+                      done
+            fi
+        fi
+
+        case "$ev" in
+            Stop) release "$name"; release_needs "$own" ;;
+            SessionEnd) for f in "$DIR/$name" "$DIR/$name"-*; do rm -f "$f"; done; release_needs "$own" ;;
+            # A tool can run long (builds), so hold 2h while one is running; between
+            # tools a 15-min hold is plenty and limits a stale hold if Stop is missed.
+            PreToolUse) hold "$name" 120 "$own" ;;
+            *) hold "$name" 15 "$own" ;;
+        esac
+        exit 0 ;;
+    *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac

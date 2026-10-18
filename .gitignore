@@ -1,0 +1,6 @@
+.build/
+build/
+tests/bright
+.DS_Store
+*.xcodeproj/xcuserdata/
+.swiftpm/
