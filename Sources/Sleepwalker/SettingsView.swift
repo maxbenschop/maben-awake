@@ -258,11 +258,18 @@ struct LidPane: View {
             } header: {
                 Text("Lid Closed")
             } footer: {
-                if model.lidHelperInstalled {
-                    Label("Lid-closed helper installed", systemImage: "checkmark.seal.fill")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                HStack(alignment: .firstTextBaseline) {
+                    if model.lidSleepDisabled {
+                        Label("Right now, closing the lid won't sleep the Mac.", systemImage: "checkmark.seal.fill")
+                    } else {
+                        Label("Right now, closing the lid sleeps the Mac.", systemImage: "moon.zzz")
+                    }
+                    Spacer()
+                    Button("Show Log") { Integration.open(EventLog.url) }
+                        .buttonStyle(.link)
                 }
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
 
             Section {
@@ -283,6 +290,7 @@ struct LidPane: View {
                 Text("With an external display connected, nothing is frozen or dimmed. If the Mac gets seriously hot with the lid closed, Sleepwalker lets it sleep to cool down.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -348,6 +356,7 @@ struct AIPane: View {
                 CommandRow(command: "awake run tests -- npm test", detail: "Stay awake while a command runs")
                 CommandRow(command: "awake hold build 30", detail: "Stay awake for 30 minutes")
                 CommandRow(command: "awake list", detail: "Show active requests")
+                CommandRow(command: "awake log", detail: "Why the Mac was kept awake, or slept")
             } header: {
                 Text("Commands")
             }

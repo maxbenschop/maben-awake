@@ -67,6 +67,8 @@ awake hold build 30            # keep awake for 30 min
 awake release build
 awake run tests -- npm test    # keep awake while a command runs
 awake list
+awake log                      # why the Mac was kept awake (or wasn't), sleeps and wakes
+awake sleeplog                 # macOS's own record of real sleeps and wakes
 ```
 
 Leases are just files in `~/Library/Application Support/Sleepwalker/leases/`,
@@ -84,6 +86,15 @@ so a lease can never outlive its expiry even if the tool crashes.
   while you're away, Sleepwalker stops keeping the Mac awake so it sleeps and
   cools down (logged in `~/Library/Logs/Sleepwalker.log`). Cleared when you
   open the lid.
+- **Other sleep tools** – apps like Vorssaint or Amphetamine also toggle
+  `pmset disablesleep`. Sleepwalker reads the real value every 3 seconds, not
+  just what it last set, and blocks closed-lid sleep again if another app turned
+  it back on (logged as "re-enabled by another app").
+- **Event log** – `~/Library/Logs/Sleepwalker.log` (or `awake log`) records
+  every decision: when and why the Mac is kept awake (which Always on app,
+  which AI requests), lid and power changes, whether closed-lid sleep is
+  blocked and why not, and a snapshot of the state at every sleep and wake.
+  Compare with `awake sleeplog` to explain an unexpected sleep.
 - **Never frozen by default** – terminals and editors (where agents run),
   AI apps, calls (Zoom, FaceTime, Teams, Discord, Meet), audio (Music,
   Spotify), password managers, VPNs, sync/backup, Docker/OrbStack/Ollama/LM
