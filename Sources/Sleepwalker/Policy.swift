@@ -38,4 +38,16 @@ enum Policy {
         let id = bundleID.lowercased()
         return neverFreeze.contains(id) || neverFreezePrefixes.contains { id.hasPrefix($0) }
     }
+
+    /// Folders installed apps live in. Anything else (DerivedData, `.build`,
+    /// /tmp, a project's build/ folder) is treated as an app under development.
+    private static let installedRoots = ["/Applications/", "/System/", "/Library/",
+                                         NSHomeDirectory() + "/Applications/"]
+
+    static func isDevBuild(_ bundleURL: URL?) -> Bool {
+        guard let path = bundleURL?.resolvingSymlinksInPath().path else { return false }
+        // Downloaded apps run from a quarantine copy until moved to /Applications.
+        if path.contains("/AppTranslocation/") { return false }
+        return !installedRoots.contains { path.hasPrefix($0) }
+    }
 }

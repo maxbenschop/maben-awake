@@ -583,7 +583,9 @@ final class Model: ObservableObject {
             switch mode(of: app.bundleIdentifier!) {
             case .always: needed = true
             case .whileAI: needed = working || isRequested(app)
-            case .onDemand: needed = isRequested(app)
+            // A dev build an AI just launched to test (Xcode, `swift build`,
+            // /tmp…) stays awake while an AI works, then freezes like the rest.
+            case .onDemand: needed = isRequested(app) || (working && Policy.isDevBuild(app.bundleURL))
             }
             let userIsUsingIt = userPresent && (pid == frontmost || userResumed.contains(pid))
             // Never freeze an app that is still starting up: frozen mid-launch it
