@@ -39,12 +39,38 @@ struct MenuView: View {
                 .padding(.vertical, 8)
         }
         .frame(width: 360)
+        .fixedSize(horizontal: false, vertical: true)
+        .background(GeometryReader { geo in WindowFitter(height: geo.size.height) })
     }
 
     private var listHeight: CGFloat {
         let leases = model.leases.isEmpty ? 0 : 26 + CGFloat(model.leases.count) * 30
         let apps = 26 + CGFloat(max(model.apps.count, 1)) * 30
         return min(leases + apps + 24, 400)
+    }
+}
+
+/// MenuBarExtra grows its window when the content gets taller but never
+/// shrinks it again, leaving the content floating in empty bands. Keep the
+/// window exactly as tall as the content, pinned to its top edge.
+private struct WindowFitter: NSViewRepresentable {
+    let height: CGFloat
+
+    func makeNSView(context: Context) -> NSView { NSView() }
+
+    func updateNSView(_ view: NSView, context: Context) {
+        DispatchQueue.main.async { fit(view.window) }
+    }
+
+    private func fit(_ window: NSWindow?) {
+        guard let window, height > 0 else { return }
+        let content = window.contentRect(forFrameRect: window.frame)
+        guard abs(content.height - height) > 0.5 else { return }
+        var frame = window.frame
+        let delta = height - content.height
+        frame.size.height += delta
+        frame.origin.y -= delta
+        window.setFrame(frame, display: true)
     }
 }
 
