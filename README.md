@@ -115,6 +115,12 @@ so a lease can never outlive its expiry even if the tool crashes.
 | **While AI works** | awake while any Claude turn (or `awake run`) is active |
 | **When AI asks** (default) | frozen until an AI requests it with `awake need <app>`; frozen again when that AI's turn ends |
 
+Apps running from outside `/Applications` (an Xcode or `swift build`
+product, a test build in `/tmp`) are treated as apps under development: with
+the default mode they stay awake while an AI works, so an AI testing its own
+build doesn't need `awake need`. Once no AI is working they freeze like any
+other app, even if the test window was left open.
+
 When an AI is done with an app **while the lid is closed**, Sleepwalker
 cleans up after it: an app that wasn't running when the AI asked for it is
 quit again, and in an app that was already open (Chromium browsers like Dia,
