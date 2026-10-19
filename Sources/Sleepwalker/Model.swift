@@ -78,6 +78,11 @@ final class Model: ObservableObject {
     @Published var dimWhenClosed: Bool {
         didSet { defaults.set(dimWhenClosed, forKey: "dimWhenClosed"); apply() }
     }
+    /// Keep the display from idle-sleeping while the lid is closed, so macOS
+    /// never shows the lock screen and an AI can still click in apps.
+    @Published var keepUnlockedWhenClosed: Bool {
+        didSet { defaults.set(keepUnlockedWhenClosed, forKey: "keepUnlockedWhenClosed"); apply() }
+    }
     /// Also stay awake with the lid closed (needs the one-time helper).
     @Published var lidClosedMode: Bool {
         didSet { defaults.set(lidClosedMode, forKey: "lidClosedMode"); apply() }
@@ -128,6 +133,8 @@ final class Model: ObservableObject {
     /// Preview models (UI snapshots) never touch processes, power or launchd.
     private let isPreview: Bool
     private var assertionID: IOPMAssertionID = 0
+    /// Display-sleep assertion, held only while away (see `keepUnlockedWhenClosed`).
+    private var displayAssertionID: IOPMAssertionID = 0
     private var pausedPIDs = Set<pid_t>()
     /// Helper processes (browser tabs, Electron helpers…) frozen with each app.
     private var pausedChildren: [pid_t: [pid_t]] = [:]
@@ -147,6 +154,7 @@ final class Model: ObservableObject {
     /// Last decisions written to the event log, so only changes get logged.
     private var loggedAwake: String?
     private var loggedLid: String?
+    private var loggedScreen: String?
     private var loggedLidState: String?
     private var loggedPower: String?
     /// Set after a failed `pmset` call so a broken helper doesn't flood the log.
@@ -162,6 +170,7 @@ final class Model: ObservableObject {
         pauseOthers = defaults.bool(forKey: "pauseOthers")
         lidClosedMode = defaults.object(forKey: "lidClosedMode") as? Bool ?? true
         dimWhenClosed = defaults.object(forKey: "dimWhenClosed") as? Bool ?? true
+        keepUnlockedWhenClosed = defaults.object(forKey: "keepUnlockedWhenClosed") as? Bool ?? true
         batteryCutoff = defaults.object(forKey: "batteryCutoff") as? Int ?? 10
         checked = Set(defaults.stringArray(forKey: "checked") ?? [])
         aiOnly = Set(defaults.stringArray(forKey: "aiOnly") ?? [])
@@ -257,6 +266,7 @@ final class Model: ObservableObject {
         onlyWhileCheckedRunning = false
         pauseOthers = true
         dimWhenClosed = true
+        keepUnlockedWhenClosed = true
         lidClosedMode = true
         batteryCutoff = 10
         checked = Set(modes.filter { $0.value == .always }.keys)
@@ -410,6 +420,7 @@ final class Model: ObservableObject {
         guard !isPreview else { return }
         for pid in pausedPIDs { resume(pid: pid) }
         releaseAssertion()
+        releaseDisplayAssertion()
         LidControl.setSleepDisabled(false)
         restoreBrightness()
         defaults.set(false, forKey: "running")
@@ -515,13 +526,27 @@ final class Model: ObservableObject {
         let blocked = wantLid && LidControl.isSleepDisabled
         if blocked != lidSleepDisabled { lidSleepDisabled = blocked }
 
-        // 3. Away transitions: dim the screen while away, restore when back.
+        // 3. Screen lock: with the lid closed the built-in display stays on
+        //    (dimmed to 0 below) until the display-sleep timer fires, and a few
+        //    minutes later macOS locks the screen. From then on an AI can't
+        //    click anything, so hold a display-sleep assertion while away.
+        //    Never with the lid open: there the screen should sleep as usual.
+        let wantScreenOn = shouldAssert && nowAway && keepUnlockedWhenClosed
+        wantScreenOn ? acquireDisplayAssertion() : releaseDisplayAssertion()
+        if nowAway {
+            logChange(&loggedScreen, wantScreenOn ? "screen: kept on so it doesn't lock"
+                : "screen: may turn off and lock (" + (!shouldAssert ? "not keeping awake" : "keep-unlocked is off") + ")")
+        } else {
+            loggedScreen = nil
+        }
+
+        // 4. Away transitions: dim the screen while away, restore when back.
         if nowAway != lastAway {
             lastAway = nowAway
             if nowAway { if dimWhenClosed { dimScreen() } } else { restoreBrightness(); thawStrays() }
         }
 
-        // 4. Pause / resume the other apps. Only while away: otherwise the user
+        // 5. Pause / resume the other apps. Only while away: otherwise the user
         //    may click any app at any moment.
         let shouldPause = shouldAssert && pauseOthers && nowAway
         // Apps an AI is running inside (terminal, editor, T3…) are never frozen.
@@ -698,5 +723,21 @@ final class Model: ObservableObject {
         IOPMAssertionRelease(assertionID)
         assertionID = 0
         isAsserting = false
+    }
+
+    private func acquireDisplayAssertion() {
+        guard displayAssertionID == 0 else { return }
+        IOPMAssertionCreateWithName(
+            kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
+            IOPMAssertionLevel(kIOPMAssertionLevelOn),
+            "Sleepwalker: keeping the screen unlocked while the lid is closed" as CFString,
+            &displayAssertionID
+        )
+    }
+
+    private func releaseDisplayAssertion() {
+        guard displayAssertionID != 0 else { return }
+        IOPMAssertionRelease(displayAssertionID)
+        displayAssertionID = 0
     }
 }

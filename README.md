@@ -29,6 +29,12 @@ Needs Xcode command line tools (`xcode-select --install`). macOS 13+.
   Sleepwalker, and a fresh start thaws anything a crashed instance left frozen.
 - **Screen brightness to 0 while lid is closed** – the previous brightness is
   saved and restored when the lid opens (or at next launch if the app died).
+- **Screen stays unlocked while lid is closed** – with the lid closed the
+  built-in display would idle-sleep after your *Turn display off* time, and a
+  few minutes later macOS locks the screen, after which an AI can't click in
+  any app. Sleepwalker holds a display-sleep assertion while it keeps the Mac
+  awake with the lid closed (never with the lid open), so the screen stays on
+  (at brightness 0) and unlocked. Off switch in Settings → Lid & Power.
 - Per-app modes – your choices are remembered per app (by bundle ID).
 - **Launch at login** – in Settings; enabled automatically on first run.
 
@@ -44,7 +50,7 @@ with live countdowns, and every running app with its mode.
 |---|---|
 | General | manual keep-awake, "only while an Always on app runs", open at login |
 | Apps | modes for running *and* remembered apps, search, reset per app or all |
-| Lid & Power | lid-closed mode (or its one-time setup), battery cutoff, freezing, dimming |
+| Lid & Power | lid-closed mode (or its one-time setup), battery cutoff, freezing, dimming, keeping the screen unlocked |
 | AI | whether the Claude Code hooks and `awake` CLI are installed, active requests, copyable commands, logs |
 | About | version |
 
