@@ -3,6 +3,11 @@
 A tiny macOS menu bar app: keep the Mac awake for the apps your AI agent needs
 (T3 Code, Dia, Docker…) and freeze everything else so it uses no CPU.
 
+<p>
+  <img src="docs/screenshots/menu-busy-light.png" width="300" alt="Menu">
+  <img src="docs/screenshots/menu-busy-dark.png" width="300" alt="Menu in dark mode">
+</p>
+
 ## Build & install
 
 ```sh
@@ -24,8 +29,24 @@ Needs Xcode command line tools (`xcode-select --install`). macOS 13+.
   Sleepwalker, and a fresh start thaws anything a crashed instance left frozen.
 - **Screen brightness to 0 while lid is closed** – the previous brightness is
   saved and restored when the lid opens (or at next launch if the app died).
-- Checkbox list – your choices are remembered per app (by bundle ID).
-- **Launch at login** – toggle in the menu; enabled automatically on first run.
+- Per-app modes – your choices are remembered per app (by bundle ID).
+- **Launch at login** – in Settings; enabled automatically on first run.
+
+## Menu and Settings
+
+The menu shows what's keeping the Mac awake, a switch to keep it awake by
+hand, quick toggles (freeze apps, dim screen, lid closed), active AI requests
+with live countdowns, and every running app with its mode.
+
+**Settings…** (⌘,) has these tabs:
+
+| Tab | What's there |
+|---|---|
+| General | manual keep-awake, "only while an Always on app runs", open at login |
+| Apps | modes for running *and* remembered apps, search, reset per app or all |
+| Lid & Power | lid-closed mode (or its one-time setup), battery cutoff, freezing, dimming |
+| AI | whether the Claude Code hooks and `awake` CLI are installed, active requests, copyable commands, logs |
+| About | version |
 
 ## Let AI ask for it (`awake` CLI)
 
@@ -107,17 +128,22 @@ Dia note: reading page content via AppleScript JavaScript needs Dia launched
 with `--enable-applescript-javascript`; the test reads the tab title/URL from
 Dia and fetches the text over HTTP instead.
 
+UI snapshots: `swift build && .build/debug/Sleepwalker --snapshot /tmp/snaps`
+renders the menu and every Settings tab (light and dark) to PNGs with canned
+data. It never starts the real app, so it's safe while Sleepwalker is running.
+
 ## Notes
 
 - Frozen apps can't receive network messages or notifications while frozen.
   Don't freeze things like Messages if you want notifications.
 - **Lid closed** – macOS ignores normal keep-awake requests when the lid
-  closes, so Sleepwalker uses `pmset disablesleep`. Click *Enable lid-closed
-  mode…* once (asks for your password); it installs
+  closes, so Sleepwalker uses `pmset disablesleep`. Click the *Lid closed…*
+  tile in the menu (or *Set Up…* in Settings → Lid & Power) once; it asks for
+  your password and installs
   `/etc/sudoers.d/awakekeeper`, which allows only
   `pmset -a disablesleep 0|1` without a password. Closed-lid sleep is blocked
-  only while Sleepwalker is keeping the Mac awake, below 10% battery it's
-  re-enabled, and quitting the app always re-enables it. Remove with
+  only while Sleepwalker is keeping the Mac awake, below 10% battery (adjustable
+  in Settings) it's re-enabled, and quitting the app always re-enables it. Remove with
   `sudo Resources/install-lid-helper.sh --uninstall`.
 - Docker Desktop's actual engine runs in helper processes, not the main app,
   and Sleepwalker only touches regular (Dock-visible) apps, so checking Docker

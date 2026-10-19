@@ -14,6 +14,33 @@ enum AppMode: String, CaseIterable, Identifiable {
         case .onDemand: "When AI asks"
         }
     }
+    /// Short form for the compact mode button in the menu.
+    var shortLabel: String {
+        switch self {
+        case .always: "Always on"
+        case .whileAI: "With AI"
+        case .onDemand: "On request"
+        }
+    }
+    var symbol: String {
+        switch self {
+        case .always: "sun.max.fill"
+        case .whileAI: "sparkles"
+        case .onDemand: "moon.zzz.fill"
+        }
+    }
+    var explanation: String {
+        switch self {
+        case .always: "Never frozen."
+        case .whileAI: "Awake while any AI turn or `awake run` is active."
+        case .onDemand: "Frozen until an AI asks for it with `awake need`."
+        }
+    }
+}
+
+/// What the menu bar icon and the menu header show.
+enum KeepAwakeState: Equatable {
+    case idle, awake, aiWorking, overheated
 }
 
 /// One row in the app list.
@@ -55,6 +82,10 @@ final class Model: ObservableObject {
     @Published var lidClosedMode: Bool {
         didSet { defaults.set(lidClosedMode, forKey: "lidClosedMode"); apply() }
     }
+    /// On battery below this percentage, closed-lid sleep is allowed again.
+    @Published var batteryCutoff: Int {
+        didSet { defaults.set(batteryCutoff, forKey: "batteryCutoff"); apply() }
+    }
     /// Bundle IDs of apps that must stay alive.
     @Published private(set) var checked: Set<String> {
         didSet { defaults.set(Array(checked), forKey: "checked") }
@@ -79,6 +110,7 @@ final class Model: ObservableObject {
     /// Start at login and restart automatically after a crash.
     @Published var launchAtLogin: Bool = false {
         didSet {
+            guard !isPreview else { return }
             defaults.set(launchAtLogin, forKey: "wantAgent")
             guard launchAtLogin != (Instance.isEnabled) else { return }
             let actual = Instance.setEnabled(launchAtLogin)
@@ -92,7 +124,9 @@ final class Model: ObservableObject {
     /// Set when this run started after the previous one crashed.
     @Published private(set) var recoveredFromCrash = false
 
-    private let defaults = UserDefaults.standard
+    private let defaults: UserDefaults
+    /// Preview models (UI snapshots) never touch processes, power or launchd.
+    private let isPreview: Bool
     private var assertionID: IOPMAssertionID = 0
     private var pausedPIDs = Set<pid_t>()
     /// Helper processes (browser tabs, Electron helpers…) frozen with each app.
@@ -114,11 +148,14 @@ final class Model: ObservableObject {
     private var observers: [NSObjectProtocol] = []
 
     init() {
+        defaults = .standard
+        isPreview = false
         keepAwake = defaults.bool(forKey: "keepAwake")
         onlyWhileCheckedRunning = defaults.bool(forKey: "onlyWhileCheckedRunning")
         pauseOthers = defaults.bool(forKey: "pauseOthers")
         lidClosedMode = defaults.object(forKey: "lidClosedMode") as? Bool ?? true
         dimWhenClosed = defaults.object(forKey: "dimWhenClosed") as? Bool ?? true
+        batteryCutoff = defaults.object(forKey: "batteryCutoff") as? Int ?? 10
         checked = Set(defaults.stringArray(forKey: "checked") ?? [])
         aiOnly = Set(defaults.stringArray(forKey: "aiOnly") ?? [])
         explicitOnDemand = Set(defaults.stringArray(forKey: "explicitOnDemand") ?? [])
@@ -190,6 +227,32 @@ final class Model: ObservableObject {
         apply()
     }
 
+    /// A model with canned state for rendering the UI; has no side effects.
+    init(preview apps: [AppEntry], leases: [Lease], asserting: Bool, away: Bool = false,
+         modes: [String: AppMode] = [:], lidHelper: Bool = true, recovered: Bool = false, overheated: Bool = false) {
+        defaults = UserDefaults(suiteName: "com.maxbenschop.sleepwalker.preview")!
+        isPreview = true
+        keepAwake = true
+        onlyWhileCheckedRunning = false
+        pauseOthers = true
+        dimWhenClosed = true
+        lidClosedMode = true
+        batteryCutoff = 10
+        checked = Set(modes.filter { $0.value == .always }.keys)
+        aiOnly = Set(modes.filter { $0.value == .whileAI }.keys)
+        explicitOnDemand = Set(modes.filter { $0.value == .onDemand }.keys)
+        self.apps = apps
+        self.leases = leases
+        isAsserting = asserting
+        self.away = away
+        lidClosed = away
+        lidSleepDisabled = asserting && lidHelper
+        lidHelperInstalled = lidHelper
+        recoveredFromCrash = recovered
+        self.overheated = overheated
+        launchAtLogin = true
+    }
+
     // MARK: Public actions
 
     func mode(of bundleID: String) -> AppMode {
@@ -213,6 +276,45 @@ final class Model: ObservableObject {
         }
         userResumed.remove(entry.id)
         apply()
+    }
+
+    /// Bundle IDs with a mode the user picked, whether or not they're running.
+    var customizedBundleIDs: Set<String> { checked.union(aiOnly).union(explicitOnDemand) }
+
+    /// Back to the default mode (Always on for protected apps, else When AI asks).
+    func resetMode(_ bundleID: String) {
+        checked.remove(bundleID)
+        aiOnly.remove(bundleID)
+        explicitOnDemand.remove(bundleID)
+        apply()
+    }
+
+    func resetAllModes() {
+        checked.removeAll()
+        aiOnly.removeAll()
+        explicitOnDemand.removeAll()
+        apply()
+    }
+
+    func setMode(bundleID: String, _ mode: AppMode) {
+        if let entry = apps.first(where: { $0.bundleID == bundleID }) { return setMode(entry, mode) }
+        resetMode(bundleID)
+        switch mode {
+        case .always: checked.insert(bundleID)
+        case .whileAI: aiOnly.insert(bundleID)
+        case .onDemand: if Policy.isProtectedByDefault(bundleID) { explicitOnDemand.insert(bundleID) }
+        }
+        apply()
+    }
+
+    var frozenCount: Int { apps.filter(\.isPaused).count }
+
+    func dismissCrashNotice() { recoveredFromCrash = false }
+
+    var state: KeepAwakeState {
+        if overheated { return .overheated }
+        if !isAsserting { return .idle }
+        return aiWorking ? .aiWorking : .awake
     }
 
     /// An AI is actively working (a turn or `awake run`), as opposed to only
@@ -240,32 +342,51 @@ final class Model: ObservableObject {
     }()
 
     func installLidHelper() {
+        guard !isPreview else { return }
         lidHelperInstalled = LidControl.installHelper()
         appliedLidSleepDisabled = nil
         apply()
     }
 
-    func release(_ lease: Lease) { LeaseStore.remove(lease); apply() }
-    func releaseAllLeases() { LeaseStore.removeAll(); apply() }
+    func release(_ lease: Lease) {
+        guard !isPreview else { return }
+        LeaseStore.remove(lease); apply()
+    }
+    func releaseAllLeases() {
+        guard !isPreview else { return }
+        LeaseStore.removeAll(); apply()
+    }
 
-    /// Why the Mac is currently being kept awake, for the status line.
-    var statusText: String {
-        if overheated { return "Mac got too hot with the lid closed, so it was allowed to sleep" }
-        if !isAsserting { return "Mac may sleep normally" }
-        let lid: String
-        if !lidSleepDisabled { lid = "" }
-        else if away { lid = " · lid closed, apps frozen" }
-        else if lidClosed { lid = " · external display, nothing frozen" }
-        else { lid = " · lid closed OK" }
-        if !leases.isEmpty {
-            let names = leases.map(\.name).joined(separator: ", ")
-            return "Kept awake by \(names)\(lid)"
+    /// One-line headline for the menu header.
+    var headline: String {
+        switch state {
+        case .overheated: "Cooling down"
+        case .idle: "Mac can sleep"
+        case .awake: "Keeping Mac awake"
+        case .aiWorking: "AI is working"
         }
-        return "Mac is being kept awake\(lid)"
+    }
+
+    /// Why the Mac is (or isn't) being kept awake.
+    var statusText: String {
+        if overheated { return "Too hot with the lid closed, so sleep is allowed" }
+        if !isAsserting {
+            if keepAwake && onlyWhileCheckedRunning { return "Waiting for an \"Always on\" app to run" }
+            return keepAwake ? "Sleeps normally" : "Sleeps normally · no AI requests"
+        }
+        var parts: [String] = []
+        let requests = leases.count
+        if requests > 0 { parts.append(requests == 1 ? "1 AI request" : "\(requests) AI requests") }
+        else { parts.append("Kept awake manually") }
+        if away { parts.append(pauseOthers ? "lid closed, \(frozenCount) frozen" : "lid closed") }
+        else if lidClosed { parts.append("external display") }
+        else if lidSleepDisabled { parts.append("lid can close") }
+        return parts.joined(separator: " · ")
     }
 
     /// Resume everything we paused. Called before quitting.
     func shutdown() {
+        guard !isPreview else { return }
         for pid in pausedPIDs { resume(pid: pid) }
         releaseAssertion()
         LidControl.setSleepDisabled(false)
@@ -299,6 +420,7 @@ final class Model: ObservableObject {
     }
 
     private func apply() {
+        guard !isPreview else { return }
         let running = runningApps()
         let currentLeases = LeaseStore.active()
         if currentLeases != leases { leases = currentLeases }
@@ -337,7 +459,7 @@ final class Model: ObservableObject {
 
         // 2. Closed-lid sleep: only blocked while we're keeping the Mac awake,
         //    and never on a nearly empty battery.
-        let wantLid = shouldAssert && lidClosedMode && lidHelperInstalled && !LidControl.batteryBelow(10)
+        let wantLid = shouldAssert && lidClosedMode && lidHelperInstalled && !LidControl.batteryBelow(batteryCutoff)
         if wantLid != appliedLidSleepDisabled {
             if LidControl.setSleepDisabled(wantLid) || !wantLid { appliedLidSleepDisabled = wantLid }
             lidSleepDisabled = wantLid && appliedLidSleepDisabled == true
