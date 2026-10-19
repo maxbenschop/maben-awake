@@ -284,6 +284,10 @@ struct LidPane: View {
                          : "Brightness control isn't available on this Mac.")
                 }
                 .disabled(!Brightness.isAvailable)
+                Toggle(isOn: $model.keepUnlockedWhenClosed) {
+                    Text("Keep the screen unlocked")
+                    Text("Stops the display from idle-sleeping, which is what makes macOS lock the screen. Without it, an AI can't click in apps after about half an hour.")
+                }
             } header: {
                 Text("While the Lid Is Closed")
             } footer: {
