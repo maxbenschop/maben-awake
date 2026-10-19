@@ -37,6 +37,30 @@ enum LidControl {
         return p.terminationStatus == 0
     }
 
+    /// The system's actual `disablesleep` value. Other tools (Vorssaint, Amphetamine,
+    /// a manual `pmset`) can change it behind our back, so never trust a cached value.
+    static var isSleepDisabled: Bool {
+        let entry = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard entry != 0 else { return false }
+        defer { IOObjectRelease(entry) }
+        return (IORegistryEntryCreateCFProperty(entry, "SleepDisabled" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Bool) ?? false
+    }
+
+    /// "AC" or "battery 87%", for the event log.
+    static var powerDescription: String {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
+        else { return "AC" }
+        for source in list {
+            guard let desc = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
+                  desc[kIOPSPowerSourceStateKey] as? String == kIOPSBatteryPowerValue
+            else { continue }
+            return "battery \(desc[kIOPSCurrentCapacityKey] as? Int ?? -1)%"
+        }
+        return "AC"
+    }
+
     /// True when running on battery below `percent`. Used as a safety cutoff so a
     /// closed laptop in a bag doesn't drain to zero.
     static func batteryBelow(_ percent: Int) -> Bool {

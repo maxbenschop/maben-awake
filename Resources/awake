@@ -7,6 +7,8 @@
 #   awake release <name>            release a hold
 #   awake run <name> -- <cmd...>    keep awake while <cmd> runs
 #   awake list                      show active holds
+#   awake log [lines]               why Sleepwalker kept the Mac awake (or didn't), sleeps and wakes
+#   awake sleeplog [lines]          macOS's own record of real sleeps and wakes (pmset log)
 #   awake hook                      used by Claude Code hooks (reads hook JSON on stdin)
 #
 # Holds are files in ~/Library/Application Support/Sleepwalker/leases/<name>
@@ -69,6 +71,16 @@ case "$1" in
             read -r exp _ app < "$f"; left=$(( (exp - now) / 60 ))
             [ "$left" -ge 0 ] && echo "$(basename "$f")  ${left} min left${app:+  (app: $app)}"
         done; true ;;
+    log)
+        EVENTS="$HOME/Library/Logs/Sleepwalker.log"
+        [ -f "$EVENTS" ] || { echo "awake: no log yet ($EVENTS)" >&2; exit 1; }
+        tail -n "${2:-60}" "$EVENTS" ;;
+    sleeplog)
+        # Real sleeps (lid, idle, low battery…) and user wakes; skips the
+        # Power Nap / maintenance dark wakes that happen every few minutes.
+        pmset -g log | grep -E " (Sleep|Wake) +	" \
+            | grep -vE "Maintenance Sleep|Sleep Service Back to Sleep|Notification Wake Back to Sleep|Entering DarkWake" \
+            | sed -E 's/ +\+[0-9]{4} /  /; s/	+/  /g; s/ {3,}/  /g' | cut -c1-160 | tail -n "${2:-30}" ;;
     hook)
         # Claude Code hook. The compiled sleepwalker-hook is ~8x faster; this
         # shell version is only the fallback.

@@ -144,6 +144,13 @@ final class Model: ObservableObject {
     private var userResumed = Set<pid_t>()
     /// Last value we sent to `pmset disablesleep`; nil = unknown, forces a reset.
     private var appliedLidSleepDisabled: Bool?
+    /// Last decisions written to the event log, so only changes get logged.
+    private var loggedAwake: String?
+    private var loggedLid: String?
+    private var loggedLidState: String?
+    private var loggedPower: String?
+    /// Set after a failed `pmset` call so a broken helper doesn't flood the log.
+    private var lidSetFailed = false
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
 
@@ -196,6 +203,20 @@ final class Model: ObservableObject {
             Task { @MainActor in
                 self?.pausedPIDs.remove(app.processIdentifier)
                 self?.userResumed.remove(app.processIdentifier)
+                self?.apply()
+            }
+        })
+
+        // Log every sleep and wake with the state at that moment, so a Mac
+        // that fell asleep unexpectedly can be explained afterwards.
+        observers.append(center.addObserver(
+            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.logSnapshot("Mac is going to sleep") } })
+        observers.append(center.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.logSnapshot("Mac woke up")
                 self?.apply()
             }
         })
@@ -431,6 +452,7 @@ final class Model: ObservableObject {
         // protected defaults (an open Mail shouldn't keep the Mac awake).
         let anyCheckedRunning = running.contains { checked.contains($0.bundleIdentifier!) }
         let manual = keepAwake && (!onlyWhileCheckedRunning || anyCheckedRunning)
+        let power = LidControl.powerDescription
 
         // Away = lid closed and no external display (clamshell mode means the
         // user is working on the external screen, so nothing is frozen or dimmed).
@@ -438,6 +460,9 @@ final class Model: ObservableObject {
         let nowAway = closed && !LidControl.externalDisplayActive
         if closed != lidClosed { lidClosed = closed }
         if nowAway != away { away = nowAway }
+        logChange(&loggedLidState, closed ? (nowAway ? "lid closed" : "lid closed, external display") : "lid open")
+        logChange(&loggedPower, power == "AC" ? "power: AC" : "power: battery",
+                  detail: power == "AC" ? nil : String(power.dropFirst("battery ".count)))
 
         // Heat check: a closed laptop (e.g. in a bag) that gets seriously hot is
         // allowed to sleep. Cleared once someone is back at the Mac.
@@ -456,14 +481,39 @@ final class Model: ObservableObject {
 
         let shouldAssert = (manual || !currentLeases.isEmpty) && !overheated
         shouldAssert ? acquireAssertion() : releaseAssertion()
+        logChange(&loggedAwake, awakeDecision(running: running, manual: manual, leases: currentLeases))
 
         // 2. Closed-lid sleep: only blocked while we're keeping the Mac awake,
         //    and never on a nearly empty battery.
-        let wantLid = shouldAssert && lidClosedMode && lidHelperInstalled && !LidControl.batteryBelow(batteryCutoff)
-        if wantLid != appliedLidSleepDisabled {
-            if LidControl.setSleepDisabled(wantLid) || !wantLid { appliedLidSleepDisabled = wantLid }
-            lidSleepDisabled = wantLid && appliedLidSleepDisabled == true
+        let lowBattery = LidControl.batteryBelow(batteryCutoff)
+        let wantLid = shouldAssert && lidClosedMode && lidHelperInstalled && !lowBattery
+        logChange(&loggedLid, wantLid ? "closed-lid sleep: blocked"
+            : "closed-lid sleep: allowed (" + (!shouldAssert ? "not keeping awake"
+                : !lidClosedMode ? "lid-closed mode is off"
+                : !lidHelperInstalled ? "lid helper not installed"
+                : "battery below \(batteryCutoff)%") + ")")
+        // Compare against the real system value, not just what we last set:
+        // another app can turn `disablesleep` off, and then closing the lid
+        // would sleep the Mac even though we're holding it awake.
+        let actual = LidControl.isSleepDisabled
+        if wantLid && !actual {
+            if appliedLidSleepDisabled == true {
+                EventLog.write("closed-lid sleep was re-enabled by another app or pmset; blocking it again")
+            }
+            if LidControl.setSleepDisabled(true) {
+                appliedLidSleepDisabled = true
+                lidSetFailed = false
+            } else if !lidSetFailed {
+                lidSetFailed = true
+                EventLog.write("ERROR: could not run 'sudo -n pmset disablesleep 1'; the Mac will sleep when the lid closes")
+            }
+        } else if !wantLid && appliedLidSleepDisabled != false {
+            // Only undo what we set ourselves; leave other apps' settings alone.
+            if appliedLidSleepDisabled == true || actual { LidControl.setSleepDisabled(false) }
+            appliedLidSleepDisabled = false
         }
+        let blocked = wantLid && LidControl.isSleepDisabled
+        if blocked != lidSleepDisabled { lidSleepDisabled = blocked }
 
         // 3. Away transitions: dim the screen while away, restore when back.
         if nowAway != lastAway {
@@ -533,6 +583,36 @@ final class Model: ObservableObject {
             )
         }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         if entries != apps { apps = entries }
+    }
+
+    /// One line describing whether (and why) we're keeping the Mac awake.
+    private func awakeDecision(running: [NSRunningApplication], manual: Bool, leases: [Lease]) -> String {
+        if overheated { return "not keeping awake: too hot with the lid closed" }
+        var reasons: [String] = []
+        if manual {
+            let names = running.filter { checked.contains($0.bundleIdentifier!) }.compactMap(\.localizedName)
+            reasons.append(onlyWhileCheckedRunning ? "Always on: \(names.joined(separator: ", "))" : "kept awake manually")
+        }
+        if !leases.isEmpty { reasons.append("AI requests: \(leases.map(\.name).sorted().joined(separator: ", "))") }
+        if !reasons.isEmpty { return "keeping awake (\(reasons.joined(separator: "; ")))" }
+        if !keepAwake { return "not keeping awake: switched off, no AI requests" }
+        return "not keeping awake: no Always on app running, no AI requests"
+    }
+
+    /// Writes `line` to the event log when it differs from the last one logged
+    /// under `key`. `detail` is appended but doesn't count as a change.
+    private func logChange(_ key: inout String?, _ line: String, detail: String? = nil) {
+        guard line != key else { return }
+        key = line
+        EventLog.write(detail.map { "\(line) (\($0))" } ?? line)
+    }
+
+    /// Snapshot of everything that decides whether the Mac may sleep.
+    func logSnapshot(_ event: String) {
+        guard !isPreview else { return }
+        EventLog.write("\(event): keeping awake=\(isAsserting), closed-lid sleep blocked=\(LidControl.isSleepDisabled), "
+            + "lid \(LidControl.isLidClosed ? "closed" : "open"), \(LidControl.powerDescription), "
+            + "\(leases.count) AI requests, \(pausedPIDs.count) apps frozen")
     }
 
     private func userActivated(_ app: NSRunningApplication) {
