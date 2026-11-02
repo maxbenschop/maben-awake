@@ -120,10 +120,19 @@ case "$1" in
             esac
             if [ "$tool" = "Bash" ]; then
                 case "$input" in *docker*|*kubectl*) need docker 10 "$own" ;; esac
-                printf '%s' "$input" \
-                    | grep -oE '(tell (application|app) \\"[^\\]+\\"|open -a \\"[^\\]+\\"|open -a [A-Za-z0-9.]+)' \
-                    | sed -E 's/^tell (application|app) \\"//; s/^open -a //; s/\\"//g; s/\\$//' \
-                    | sort -u | while read -r app; do
+                {
+                    printf '%s' "$input" \
+                        | grep -oE '(tell (application|app) \\"[^\\]+\\"|open -a \\"[^\\]+\\"|open -a [A-Za-z0-9.]+)' \
+                        | sed -E 's/^tell (application|app) \\"//; s/^open -a //; s/\\"//g; s/\\$//'
+                    # agent-desktop: `--app X` and `launch X` / `close-app X` (see sleepwalker-hook).
+                    case "$input" in *agent-desktop*)
+                        val='(\\"[^"\\]+\\"|'"'"'[^'"'"']+'"'"'|[A-Za-z0-9.][A-Za-z0-9._-]*)'
+                        printf '%s' "$input" \
+                            | grep -oE -e "--app(=| +)$val" -e "agent-desktop +(launch|close-app)( +--?[a-zA-Z-]+)* +$val" \
+                            | sed -E 's/^--app(=| +)//; s/^agent-desktop +(launch|close-app)( +--?[a-zA-Z-]+)* +//; s/\\"//g' \
+                            | sed "s/^'//; s/'\$//" ;;
+                    esac
+                } | sort -u | while read -r app; do
                         case "$app" in ""|"System Events"|Finder) ;; *) need "$app" 10 "$own" ;; esac
                       done
             fi

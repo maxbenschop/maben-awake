@@ -133,8 +133,9 @@ a small compiled program (~8 ms per call; the old shell hook took ~50–60 ms).
 `awake hook` forwards to it. It prints nothing, so it costs Claude no tokens.
 
 Hooks request apps automatically for browser tools (→ default browser),
-`docker`/`kubectl` commands, `osascript 'tell application "X"'` and
-`open -a X`. Frozen apps are frozen together with their helper processes
+`docker`/`kubectl` commands, `osascript 'tell application "X"'`,
+`open -a X` and [agent-desktop](https://github.com/vercel-labs/agent-desktop)
+(`--app X`, `launch X`, `close-app X`). Frozen apps are frozen together with their helper processes
 (browser tabs, Electron helpers). Hook activity is logged to
 `~/Library/Logs/Sleepwalker-hooks.log`.
 

@@ -68,12 +68,30 @@ let regexes: [NSRegularExpression] = [
     #"\bopen(?: -[a-zA-Z]+)* -a ([A-Za-z0-9.]+)"#,          // open -a Dia, open -g -a TextEdit
 ].map { try! NSRegularExpression(pattern: $0) }
 
+// agent-desktop (vercel-labs/agent-desktop) drives apps through the accessibility
+// tree, which a frozen app can't answer. It names the app with `--app X` or as the
+// argument of `launch` / `close-app`; ref actions (`click @s1:e8`) name none, but
+// they follow a snapshot whose lease still covers the app.
+let agentDesktopRegexes: [NSRegularExpression] = [
+    #"--app(?:=| +)(?:\\?"([^"\\]+)\\?"|'([^']+)'|([A-Za-z0-9.][A-Za-z0-9._-]*))"#,
+    #"agent-desktop +(?:launch|close-app)(?: +--?[a-zA-Z-]+)* +(?:\\?"([^"\\]+)\\?"|'([^']+)'|([A-Za-z0-9.][A-Za-z0-9._-]*))"#,
+].map { try! NSRegularExpression(pattern: $0) }
+
 func appsMentioned(in command: String) -> Set<String> {
     var apps = Set<String>()
     let range = NSRange(command.startIndex..., in: command)
     for re in regexes {
         for m in re.matches(in: command, range: range) {
             if let r = Range(m.range(at: 1), in: command) { apps.insert(String(command[r])) }
+        }
+    }
+    if command.contains("agent-desktop") {
+        for re in agentDesktopRegexes {
+            for m in re.matches(in: command, range: range) {
+                for i in 1..<m.numberOfRanges {
+                    if let r = Range(m.range(at: i), in: command) { apps.insert(String(command[r])) }
+                }
+            }
         }
     }
     if command.range(of: #"\b(docker|kubectl)\b"#, options: .regularExpression) != nil { apps.insert("docker") }

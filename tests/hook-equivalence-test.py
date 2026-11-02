@@ -28,6 +28,11 @@ SCENARIOS = [
     ("browser extension tool", [ev("PreToolUse", tool_name="mcp__claude-in-chrome__navigate", tool_input={"url": "x"})], True),
     ("docker command", [bash("docker ps -a")], True),
     ("System Events ignored", [bash("osascript -e 'tell application \"System Events\" to keystroke \"a\"'")], True),
+    ("agent-desktop --app", [bash("agent-desktop snapshot --app Dia -i && agent-desktop find --app=Slack")], True),
+    ("agent-desktop quoted --app", [bash("agent-desktop snapshot --app \"Visual Studio Code\" -i; agent-desktop snapshot --app 'Google Chrome'")], True),
+    ("agent-desktop launch / close-app", [bash("agent-desktop launch --activate Spotify && agent-desktop close-app \"Microsoft Word\"")], True),
+    ("agent-desktop ref action names no app", [bash("agent-desktop click @s8f3k2p9:e8")], True),
+    ("--app without agent-desktop ignored", [bash("mytool --app Dia")], True),
     ("session end clears all", [bash("open -a Spotify"), ev("PreToolUse", tool_name="Monitor", tool_input={}), ev("SessionEnd")], True),
     ("garbage input", ["not json at all"], True),
     # Intended improvements:
