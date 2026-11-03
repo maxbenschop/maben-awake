@@ -9,6 +9,7 @@ cd "$(dirname "$0")"
 swift build -c release
 BIN=$(swift build -c release --show-bin-path)/Sleepwalker
 HOOK=$(swift build -c release --show-bin-path)/SleepwalkerHook
+FAILSAFE=$(swift build -c release --show-bin-path)/SleepwalkerFailsafe
 
 # App icon: render once, then build the .icns from the 1024px PNG.
 if [ ! -f build/AppIcon.icns ] || [ Resources/make-icon.swift -nt build/AppIcon.icns ]; then
@@ -26,12 +27,13 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/Sleepwalker"
 cp "$HOOK" "$APP/Contents/MacOS/sleepwalker-hook"
+cp "$FAILSAFE" "$APP/Contents/MacOS/sleepwalker-failsafe"
 cp Info.plist "$APP/Contents/Info.plist"
 # Unique build number per build: macOS only refreshes its background-item record
 # (which pins the launchd agent to one code signature) when the version changes.
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date +%Y%m%d%H%M%S)" "$APP/Contents/Info.plist"
 cp build/AppIcon.icns "$APP/Contents/Resources/"
-cp Resources/awake Resources/install-lid-helper.sh "$APP/Contents/Resources/"
+cp Resources/awake Resources/install-lid-helper.sh Resources/install-failsafe.sh "$APP/Contents/Resources/"
 codesign --force --sign - "$APP" >/dev/null 2>&1 || true
 echo "Built $APP"
 

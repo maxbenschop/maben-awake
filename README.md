@@ -86,6 +86,25 @@ so a lease can never outlive its expiry even if the tool crashes.
   KeepAlive on crash). If it crashes or is force-killed, launchd restarts it
   within seconds and the new instance thaws every frozen app and restores
   the sleep and brightness settings. Quit from the menu stays quit.
+- **Lid-open failsafe** – a small root launch daemon
+  (`/Library/LaunchDaemons/com.maxbenschop.sleepwalker.failsafe.plist`) makes
+  sure opening the lid always brings the Mac back, even if Sleepwalker itself
+  is stuck. Sleepwalker writes its view of the lid to
+  `~/Library/Application Support/Sleepwalker/heartbeat.json` whenever it
+  changes. If the lid opens and Sleepwalker hasn't reported "lid open, screen
+  restored" within 6 seconds, the daemon unfreezes every stopped process of
+  the logged-in user and turns the brightness back up; if Sleepwalker still
+  hasn't reported in after 16 seconds, it restarts it. Being root, nothing in
+  your login session can freeze it. Installed with the lid-closed setup, or
+  later from Settings → Lid & Power → Safety (Sleepwalker offers it once when
+  it's missing or outdated). Log: `/Library/Logs/Sleepwalker-failsafe.log`
+  (recoveries also appear in `awake log`). Check it with
+  `/Library/PrivilegedHelperTools/com.maxbenschop.sleepwalker.failsafe status`;
+  remove with `sudo Resources/install-failsafe.sh --uninstall`.
+- **Only real processes are signalled** – every freeze/thaw goes through
+  `Signals.send`, which refuses pid ≤ 1 and Sleepwalker itself. (`kill(-1, …)`
+  signals *every* process; an app that is quitting reports pid -1, which once
+  froze the whole login session with the screen at brightness 0.)
 - **External display** – "away" means lid closed *and* no external display.
   In clamshell mode (lid closed, external monitor) nothing is frozen or dimmed.
 - **Heat check** – if macOS reports a *serious* or *critical* thermal state
@@ -147,7 +166,8 @@ requesters, closed-lid power state) and writes a report to the Desktop. `tests/l
 lid close/open cycle, `tests/cleanup-test.sh` the tab/app cleanup (run it while no other AI
 session is using the browser, or its tab checks are correctly skipped),
 `tests/hook-equivalence-test.py` compares the compiled hook with the shell
-version, and `tests/live-session-test.sh` runs a real headless Claude session.
+version, `tests/failsafe-test.sh` runs the failsafe daemon's lid-open logic with
+a fake lid and a dry run (safe while Sleepwalker runs), and `tests/live-session-test.sh` runs a real headless Claude session.
 Dia note: reading page content via AppleScript JavaScript needs Dia launched
 with `--enable-applescript-javascript`; the test reads the tab title/URL from
 Dia and fetches the text over HTTP instead.

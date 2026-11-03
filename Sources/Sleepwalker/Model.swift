@@ -112,6 +112,9 @@ final class Model: ObservableObject {
     @Published private(set) var lidHelperInstalled = LidControl.isHelperInstalled
     @Published private(set) var lidSleepDisabled = false
     @Published private(set) var lidClosed = LidControl.isLidClosed
+    /// The root lid-open failsafe is installed and current (see Failsafe.swift).
+    @Published private(set) var failsafeInstalled = false
+    @Published private(set) var installingFailsafe = false
     /// Start at login and restart automatically after a crash.
     @Published var launchAtLogin: Bool = false {
         didSet {
@@ -161,6 +164,7 @@ final class Model: ObservableObject {
     private var lidSetFailed = false
     private var timer: Timer?
     private var observers: [NSObjectProtocol] = []
+    private let startedAt = Date()
 
     init() {
         defaults = .standard
@@ -191,6 +195,7 @@ final class Model: ObservableObject {
             ?? Bundle.main.bundlePath.hasPrefix("/Applications/")
         if wantAgent && !Instance.isEnabled { _ = Instance.setEnabled(true) }
         launchAtLogin = Instance.isEnabled
+        failsafeInstalled = Failsafe.isUpToDate
 
         // If we quit or crashed while the screen was dimmed, bring it back.
         if let saved = defaults.object(forKey: "savedBrightness") as? Float, !LidControl.isLidClosed {
@@ -375,8 +380,24 @@ final class Model: ObservableObject {
     func installLidHelper() {
         guard !isPreview else { return }
         lidHelperInstalled = LidControl.installHelper()
+        failsafeInstalled = Failsafe.isUpToDate
         appliedLidSleepDisabled = nil
         apply()
+    }
+
+    /// Installs or updates the lid-open failsafe (asks for the admin password).
+    func installFailsafe() {
+        guard !isPreview, !installingFailsafe else { return }
+        installingFailsafe = true
+        defaults.set(Failsafe.bundledVersion, forKey: "failsafeOfferedVersion")
+        Failsafe.install { ok in
+            Task { @MainActor in
+                let model = Model.shared
+                model.installingFailsafe = false
+                model.failsafeInstalled = Failsafe.isUpToDate
+                EventLog.write(ok ? "lid-open failsafe installed" : "lid-open failsafe not installed (cancelled or failed)")
+            }
+        }
     }
 
     func release(_ lease: Lease) {
@@ -423,6 +444,7 @@ final class Model: ObservableObject {
         releaseDisplayAssertion()
         LidControl.setSleepDisabled(false)
         restoreBrightness()
+        Heartbeat.write(lidClosed: LidControl.isLidClosed, savedBrightness: nil, quit: true)
         defaults.set(false, forKey: "running")
         EventLog.write("quit cleanly")
     }
@@ -445,6 +467,8 @@ final class Model: ObservableObject {
         let me = ProcessInfo.processInfo.processIdentifier
         return NSWorkspace.shared.runningApplications.filter {
             $0.activationPolicy == .regular
+                // -1 means the app has no process (e.g. it is quitting).
+                && Signals.isSafeTarget($0.processIdentifier)
                 && $0.processIdentifier != me
                 && $0.bundleIdentifier != "com.apple.finder"
                 && $0.bundleIdentifier != nil
@@ -545,6 +569,9 @@ final class Model: ObservableObject {
             lastAway = nowAway
             if nowAway { if dimWhenClosed { dimScreen() } } else { restoreBrightness(); thawStrays() }
         }
+        // Tell the failsafe daemon what we've done (only written on change).
+        Heartbeat.write(lidClosed: closed, savedBrightness: defaults.object(forKey: "savedBrightness") as? Float)
+        offerFailsafeIfNeeded(away: nowAway)
 
         // 5. Pause / resume the other apps. Only while away: otherwise the user
         //    may click any app at any moment.
@@ -651,19 +678,19 @@ final class Model: ObservableObject {
     }
 
     private func pause(pid: pid_t) {
-        guard !pausedPIDs.contains(pid) else { return }
+        guard Signals.isSafeTarget(pid), !pausedPIDs.contains(pid) else { return }
         // Stop the app first so it can't spawn new helpers, then its helpers.
-        guard kill(pid, SIGSTOP) == 0 else { return }
+        guard Signals.send(SIGSTOP, to: pid) else { return }
         pausedPIDs.insert(pid)
         let children = Self.descendants(of: pid)
-        for child in children { kill(child, SIGSTOP) }
+        for child in children { Signals.send(SIGSTOP, to: child) }
         pausedChildren[pid] = children
     }
 
     private func resume(pid: pid_t) {
         guard pausedPIDs.contains(pid) else { return }
-        for child in pausedChildren[pid] ?? [] { kill(child, SIGCONT) }
-        kill(pid, SIGCONT)
+        for child in pausedChildren[pid] ?? [] { Signals.send(SIGCONT, to: child) }
+        Signals.send(SIGCONT, to: pid)
         pausedPIDs.remove(pid)
         pausedChildren[pid] = nil
     }
@@ -674,7 +701,7 @@ final class Model: ObservableObject {
         for app in runningApps() {
             let pid = app.processIdentifier
             guard !pausedPIDs.contains(pid) else { continue }
-            for p in [pid] + Self.descendants(of: pid) where Self.isStopped(p) { kill(p, SIGCONT) }
+            for p in [pid] + Self.descendants(of: pid) where Self.isStopped(p) { Signals.send(SIGCONT, to: p) }
         }
     }
 
@@ -702,11 +729,26 @@ final class Model: ObservableObject {
 
     /// All child processes of `pid`, recursively.
     private static func descendants(of pid: pid_t) -> [pid_t] {
+        // `UInt32(pid)` traps on a negative pid, and launchd's children are
+        // every process on the Mac.
+        guard Signals.isSafeTarget(pid) else { return [] }
         var buffer = [pid_t](repeating: 0, count: 1024)
         let bytes = proc_listpids(UInt32(PROC_PPID_ONLY), UInt32(pid), &buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
         guard bytes > 0 else { return [] }
-        let children = buffer.prefix(Int(bytes) / MemoryLayout<pid_t>.size).filter { $0 > 0 }
+        let children = buffer.prefix(Int(bytes) / MemoryLayout<pid_t>.size).filter { Signals.isSafeTarget($0) && $0 != pid }
         return children + children.flatMap { descendants(of: $0) }
+    }
+
+    /// Offer the failsafe once per failsafe version to anyone using lid-closed
+    /// mode, while someone is at the Mac (the password dialog needs a person).
+    private func offerFailsafeIfNeeded(away: Bool) {
+        guard !away, lidHelperInstalled, !failsafeInstalled, !installingFailsafe,
+              Date().timeIntervalSince(startedAt) > 10,
+              let bundled = Failsafe.bundledVersion,
+              defaults.string(forKey: "failsafeOfferedVersion") != bundled
+        else { return }
+        EventLog.write("offering to install the lid-open failsafe")
+        installFailsafe()
     }
 
     private func acquireAssertion() {

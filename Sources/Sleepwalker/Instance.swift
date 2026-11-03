@@ -33,7 +33,7 @@ enum Instance {
 
         if launchedByLaunchd {
             // A manually started copy is running: take over from it.
-            for other in others { kill(other.processIdentifier, SIGTERM) }
+            for other in others { Signals.send(SIGTERM, to: other.processIdentifier) }
             let deadline = Date().addingTimeInterval(3)
             while others.contains(where: { !$0.isTerminated }) && Date() < deadline { usleep(50_000) }
             // Taking over from a copy we stopped ourselves is not a crash.

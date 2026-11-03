@@ -16,7 +16,9 @@ enum LidControl {
     @discardableResult
     static func installHelper() -> Bool {
         guard let script = Bundle.main.path(forResource: "install-lid-helper", ofType: "sh") else { return false }
-        let cmd = "\(shellQuote(script)) \(shellQuote(NSUserName()))"
+        var cmd = "\(shellQuote(script)) \(shellQuote(NSUserName()))"
+        // Install the lid-open failsafe in the same password prompt.
+        if let failsafe = Failsafe.installCommand { cmd += " && { " + failsafe + " || true; }" }
         let source = "do shell script \"\(cmd.replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
         var error: NSDictionary?
         NSAppleScript(source: source)?.executeAndReturnError(&error)
