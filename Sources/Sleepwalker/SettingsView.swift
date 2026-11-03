@@ -273,6 +273,22 @@ struct LidPane: View {
             }
 
             Section {
+                LabeledContent {
+                    if model.failsafeInstalled {
+                        Label("On", systemImage: "checkmark.seal.fill").foregroundStyle(.secondary)
+                    } else {
+                        Button(model.installingFailsafe ? "Installing…" : "Install…") { model.installFailsafe() }
+                            .disabled(model.installingFailsafe || Failsafe.bundledBinary == nil)
+                    }
+                } label: {
+                    Text("Lid-open failsafe")
+                    Text("A small background service that turns the screen back on and unfreezes apps when you open the lid, even if Sleepwalker gets stuck. Asks for your password once.")
+                }
+            } header: {
+                Text("Safety")
+            }
+
+            Section {
                 Toggle(isOn: $model.pauseOthers) {
                     Text("Freeze apps no AI needs")
                     Text("Frozen apps use no CPU. Opening the lid thaws everything. Set modes per app in Apps.")

@@ -14,5 +14,10 @@ let package = Package(
             name: "SleepwalkerHook",
             path: "Sources/SleepwalkerHook"
         ),
+        .executableTarget(
+            name: "SleepwalkerFailsafe",
+            path: "Sources/SleepwalkerFailsafe",
+            linkerSettings: [.linkedFramework("IOKit"), .linkedFramework("SystemConfiguration")]
+        ),
     ]
 )
