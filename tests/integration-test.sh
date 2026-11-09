@@ -57,6 +57,21 @@ check("remove: other hook kept", commands(".claude/settings.json", "PreToolUse")
 check("remove: empty events dropped", (json(".claude/settings.json")["hooks"] as? [String: Any])?["Stop"] == nil)
 check("remove: file with only our hooks has no hooks key", json(".claude-work/settings.json")["hooks"] == nil)
 
+// Codex: ~/.codex/hooks.json, kept apart from Claude Code's settings
+try FileManager.default.createDirectory(atPath: a[1] + "/.codex", withIntermediateDirectories: true)
+try #"{ "hooks": { "Stop": [ { "hooks": [ { "type": "command", "command": "echo mine" } ] } ] } }"#.write(toFile: a[1] + "/.codex/hooks.json", atomically: true, encoding: .utf8)
+check("codex missing", Integration.codexStatus == .missing)
+try Integration.installCodexHooks()
+check("codex installed", Integration.codexStatus == .installed)
+check("codex hook has --agent codex", commands(".codex/hooks.json", "Stop").contains(mine.replacingOccurrences(of: "\"\n", with: "") + " --agent codex"))
+check("codex keeps other hook", commands(".codex/hooks.json", "Stop").contains("echo mine"))
+check("codex has Interrupt", commands(".codex/hooks.json", "Interrupt").count == 1)
+try Integration.installCodexHooks()
+check("codex install twice doesn't duplicate", commands(".codex/hooks.json", "PreToolUse").count == 1)
+check("claude hooks untouched by codex", Integration.hooksStatus == .missing)
+try Integration.removeCodexHooks()
+check("codex removed, other hook kept", Integration.codexStatus == .missing && commands(".codex/hooks.json", "Stop") == ["echo mine"])
+
 check("cli missing", Integration.cliStatus == .missing)
 let sem = DispatchSemaphore(value: 0)
 Integration.installCLI { ok in check("cli installed without a password in a writable folder", ok && Integration.cliStatus == .installed); sem.signal() }

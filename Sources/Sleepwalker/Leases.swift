@@ -11,7 +11,7 @@ struct Lease: Identifiable, Hashable {
     let expires: Date
     /// App this lease asks to unfreeze (`awake need`), by name, bundle ID or "browser".
     let app: String?
-    /// Process that holds the lease (0 = none), e.g. the `claude` CLI.
+    /// Process that holds the lease (0 = none), e.g. the `claude` or `codex` CLI.
     let owner: pid_t
     var id: String { name }
     var remaining: TimeInterval { expires.timeIntervalSinceNow }

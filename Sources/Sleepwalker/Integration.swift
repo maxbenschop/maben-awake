@@ -149,6 +149,46 @@ enum Integration {
         url.path.hasPrefix(home.path + "/") ? "~" + url.path.dropFirst(home.path.count) : url.path
     }
 
+    // MARK: Codex hooks
+
+    /// Codex reads hooks from ~/.codex/hooks.json (same layout as Claude Code's settings).
+    static var codexHooksFile: URL { home.appendingPathComponent(".codex/hooks.json") }
+    /// Codex is set up on this Mac (it creates ~/.codex on first run).
+    static var codexPresent: Bool { FileManager.default.fileExists(atPath: home.appendingPathComponent(".codex").path) }
+    private static var codexCommand: String { "\"\(hookPath)\" --agent codex" }
+    private static let codexEvents = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Interrupt", "SessionEnd"]
+
+    static var codexStatus: Status {
+        guard let text = try? String(contentsOf: codexHooksFile, encoding: .utf8), text.contains("sleepwalker-hook") else { return .missing }
+        let escaped = hookPath.replacingOccurrences(of: "/", with: "\\/")
+        return text.contains(hookPath) || text.contains(escaped) ? .installed : .outdated
+    }
+
+    static func installCodexHooks() throws {
+        var settings = try read(codexHooksFile)
+        var hooks = settings["hooks"] as? [String: Any] ?? [:]
+        for event in codexEvents {
+            var groups = strip(hooks[event] as? [[String: Any]] ?? [])
+            groups.append(["hooks": [["type": "command", "command": codexCommand]]])
+            hooks[event] = groups
+        }
+        settings["hooks"] = hooks
+        try write(settings, to: codexHooksFile)
+    }
+
+    static func removeCodexHooks() throws {
+        guard FileManager.default.fileExists(atPath: codexHooksFile.path) else { return }
+        var settings = try read(codexHooksFile)
+        guard var hooks = settings["hooks"] as? [String: Any] else { return }
+        for (event, value) in hooks {
+            guard let groups = value as? [[String: Any]] else { continue }
+            let kept = strip(groups)
+            if kept.isEmpty { hooks.removeValue(forKey: event) } else { hooks[event] = kept }
+        }
+        if hooks.isEmpty { settings.removeValue(forKey: "hooks") } else { settings["hooks"] = hooks }
+        try write(settings, to: codexHooksFile)
+    }
+
     // MARK: `awake` command
 
     /// Folders on the default PATH, in order of preference.

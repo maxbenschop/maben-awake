@@ -81,6 +81,13 @@ with live countdowns, and every running app with its mode.
 | AI | install, update or remove the Claude Code hooks and the `awake` CLI; active requests, copyable commands, logs |
 | About | version |
 
+## Codex
+
+Codex uses the same hook program with `--agent codex`, from `~/.codex/hooks.json`
+(Settings → AI → Codex hooks, or `./build.sh install` when `~/.codex` exists).
+Codex asks you to review new hooks once: run `/hooks` in Codex and trust them.
+Its requests show as *Codex is working* in the menu.
+
 ## Let AI ask for it (`awake` CLI)
 
 `./build.sh install` links an `awake` command and adds Claude Code hooks to

@@ -1,8 +1,9 @@
-// sleepwalker-hook: the Claude Code hook, as a small compiled program.
+// sleepwalker-hook: the Claude Code and Codex hook, as a small compiled program.
 //
-// Claude Code runs it on every prompt and tool call with the hook JSON on
-// stdin. It keeps a lease ("hold") alive while Claude works, releases it when
-// Claude stops, and creates `need-<app>` leases for apps a tool call is about
+// Claude Code and Codex run it on every prompt and tool call with the hook JSON
+// on stdin (both use the same fields). Codex calls it with `--agent codex`. It
+// keeps a lease ("hold") alive while the agent works, releases it when the
+// agent stops, and creates `need-<app>` leases for apps a tool call is about
 // to use, so Sleepwalker can wake them. Same behaviour as `awake hook`, but
 // without starting a shell and a dozen helper processes per call.
 //
@@ -45,15 +46,22 @@ func releaseMatching(prefix: String, suffix: String = "") {
 
 // MARK: Owner
 
-/// The `claude` process this hook runs under (0 if none), so leases die with it.
-func claudeAncestor() -> pid_t {
+/// Which agent called the hook: `--agent codex` from Codex, Claude Code otherwise.
+let agent: String = {
+    let args = CommandLine.arguments
+    if let i = args.firstIndex(of: "--agent"), i + 1 < args.count { return safe(args[i + 1].lowercased()) }
+    return "claude"
+}()
+
+/// The agent process this hook runs under (0 if none), so leases die with it.
+func agentAncestor() -> pid_t {
     var pid = getppid()
     while pid > 1 {
         var info = proc_bsdinfo()
         let size = Int32(MemoryLayout<proc_bsdinfo>.size)
         guard proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &info, size) == size else { break }
         let comm = withUnsafeBytes(of: info.pbi_comm) { String(decoding: $0.prefix { $0 != 0 }, as: UTF8.self) }
-        if comm.contains("claude") { return pid }
+        if comm.contains(agent) { return pid }
         pid = pid_t(info.pbi_ppid)
     }
     return 0
@@ -106,8 +114,8 @@ let input = json["tool_input"] as? [String: Any] ?? [:]
 let sid = json["session_id"] as? String ?? "unknown"
 let event = json["hook_event_name"] as? String ?? ""
 let tool = json["tool_name"] as? String ?? ""
-let name = "claude-" + String(sid.prefix(8))
-let owner = claudeAncestor()
+let name = agent + "-" + String(sid.prefix(8))
+let owner = agentAncestor()
 
 try? FileManager.default.createDirectory(atPath: leaseDir, withIntermediateDirectories: true)
 
@@ -148,13 +156,15 @@ if event == "PreToolUse" {
     if lower.contains("chrome") || lower.contains("browser") || lower.contains("playwright") || lower.contains("preview_") {
         need("browser", owner: owner)
     }
-    if tool == "Bash", let command = input["command"] as? String {
+    // Claude Code sends the command as a string; Codex may send it as an argument list.
+    let command = (input["command"] as? String) ?? (input["command"] as? [String])?.joined(separator: " ")
+    if ["Bash", "shell", "exec_command", "local_shell"].contains(tool), let command {
         for app in appsMentioned(in: command) { need(app, owner: owner) }
     }
 }
 
 switch event {
-case "Stop":
+case "Stop", "Interrupt":   // Interrupt: Codex's turn was stopped by the user
     release(name)
     releaseMatching(prefix: "need-", suffix: "-\(owner)")
 case "SessionEnd":

@@ -329,6 +329,7 @@ struct AIPane: View {
     @State private var cliStatus = Integration.cliStatus
     @State private var hooked = Integration.hookedSettingsFiles
     @State private var hooksStatus = Integration.hooksStatus
+    @State private var codexStatus = Integration.codexStatus
     @State private var problem: String?
     @State private var busy = false
 
@@ -339,6 +340,17 @@ struct AIPane: View {
         cliStatus = Integration.cliStatus
         hooked = Integration.hookedSettingsFiles
         hooksStatus = Integration.hooksStatus
+        codexStatus = Integration.codexStatus
+    }
+
+    private func setCodex(install: Bool) {
+        do {
+            if install { try Integration.installCodexHooks() } else { try Integration.removeCodexHooks() }
+            problem = nil
+        } catch {
+            problem = error.localizedDescription
+        }
+        refresh()
     }
 
     private func setHooks(install: Bool) {
@@ -374,8 +386,22 @@ struct AIPane: View {
                 } label: {
                     Text("Claude Code hooks")
                     Text(hooked.isEmpty
-                         ? "Keeps the Mac awake while Claude Code or T3 Code works. Adds five entries to ~/.claude/settings.json."
+                         ? "Keeps the Mac awake while Claude Code works (also inside T3 Code). Adds five entries to ~/.claude/settings.json."
                          : hooked.map(Integration.tilde).joined(separator: ", "))
+                }
+                LabeledContent {
+                    StatusPill(status: codexStatus)
+                    switch codexStatus {
+                    case .missing: Button("Install") { setCodex(install: true) }.disabled(!canInstall)
+                    case .outdated: Button("Update") { setCodex(install: true) }.disabled(!canInstall)
+                    case .installed: Button("Remove") { setCodex(install: false) }
+                    }
+                } label: {
+                    Text("Codex hooks")
+                    Text(codexStatus == .installed
+                         ? "~/.codex/hooks.json. In Codex, run /hooks once and trust them."
+                         : Integration.codexPresent ? "Keeps the Mac awake while Codex works. Adds entries to ~/.codex/hooks.json."
+                                                    : "For OpenAI's Codex. Install it when you start using Codex.")
                 }
                 LabeledContent {
                     StatusPill(status: cliStatus)

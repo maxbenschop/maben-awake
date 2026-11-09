@@ -117,6 +117,21 @@ for path in paths:
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump(s, open(path, "w"), indent=2)
     print("Claude Code hooks set in", path)
+# Codex (if set up on this Mac): the same hook with --agent codex in ~/.codex/hooks.json.
+codex_dir = os.path.expanduser("~/.codex")
+if os.path.isdir(codex_dir):
+    path = os.path.join(codex_dir, "hooks.json")
+    s = json.load(open(path)) if os.path.exists(path) and open(path).read().strip() else {}
+    hooks = s.setdefault("hooks", {})
+    ccmd = {"type": "command", "command": f'"{hook}" --agent codex'}
+    for event in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Interrupt", "SessionEnd"]:
+        lst = hooks.setdefault(event, [])
+        for g in lst:
+            g["hooks"] = [h for h in g.get("hooks", []) if "sleepwalker-hook" not in h.get("command", "")]
+        lst[:] = [g for g in lst if g.get("hooks")]
+        lst.append({"hooks": [ccmd]})
+    json.dump(s, open(path, "w"), indent=2)
+    print("Codex hooks set in", path, "(run /hooks in Codex once to trust them)")
 # The product name in prose only: paths such as Library/Logs/Sleepwalker.log keep the codename.
 for md in glob.glob(os.path.expanduser("~/.claude*/CLAUDE.md")):
     t = open(md).read()
