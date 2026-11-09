@@ -1,5 +1,7 @@
-// Renders the Sleepwalker app icon: swift Resources/make-icon.swift <out.png>
-// Deliberately minimal: an indigo squircle, one crescent moon, one sparkle.
+// Renders the Maben Awake app icon: swift Resources/make-icon.swift <out.png>
+// A Maben product icon: the Gate mark in black on Awake violet (#9F7BFF),
+// on Apple's Mac icon grid (824pt body, 100pt margin). Mark width is 62% of
+// the body and the corner radius 22.5%, as in the Maben brand guidelines.
 import AppKit
 
 let size: CGFloat = 1024
@@ -11,41 +13,35 @@ let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(size), pixelsH
 NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: rep)
 let ctx = NSGraphicsContext.current!.cgContext
 
-func color(_ hex: UInt32, _ a: CGFloat = 1) -> NSColor {
-    NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255, green: CGFloat((hex >> 8) & 0xff) / 255,
-            blue: CGFloat(hex & 0xff) / 255, alpha: a)
+let body = CGRect(x: 100, y: 100, width: 824, height: 824)
+let radius = body.width * 0.225
+ctx.setFillColor(CGColor(srgbRed: 0x9F / 255, green: 0x7B / 255, blue: 0xFF / 255, alpha: 1))
+ctx.addPath(CGPath(roundedRect: body, cornerWidth: radius, cornerHeight: radius, transform: nil))
+ctx.fillPath()
+
+// The Gate mark, in the units of brand/logo/maben-mark-black.svg (viewBox 16 22 68 58, y down).
+let mark = CGMutablePath()
+mark.move(to: CGPoint(x: 16, y: 80))
+mark.addLine(to: CGPoint(x: 16, y: 46))
+mark.addQuadCurve(to: CGPoint(x: 40, y: 22), control: CGPoint(x: 16, y: 22))
+mark.addLine(to: CGPoint(x: 60, y: 22))
+mark.addQuadCurve(to: CGPoint(x: 84, y: 46), control: CGPoint(x: 84, y: 22))
+mark.addLine(to: CGPoint(x: 84, y: 80))
+for centre in [CGFloat(64), 36] {            // the two arched openings, right then left
+    mark.addLine(to: CGPoint(x: centre + 8, y: 80))
+    mark.addLine(to: CGPoint(x: centre + 8, y: 50))
+    mark.addArc(center: CGPoint(x: centre, y: 50), radius: 8, startAngle: 0, endAngle: .pi, clockwise: true)
+    mark.addLine(to: CGPoint(x: centre - 8, y: 80))
 }
+mark.closeSubpath()
 
-// Squircle on Apple's icon grid (824pt body, 100pt margin), soft drop shadow.
-let body = NSRect(x: 100, y: 100, width: 824, height: 824)
-let squircle = NSBezierPath(roundedRect: body, xRadius: 185, yRadius: 185)
-ctx.saveGState()
-ctx.setShadow(offset: CGSize(width: 0, height: -10), blur: 24, color: NSColor.black.withAlphaComponent(0.3).cgColor)
-color(0x3B2F9E).setFill(); squircle.fill()
-ctx.restoreGState()
-ctx.saveGState()
-squircle.addClip()
-NSGradient(starting: color(0x5B4BDB), ending: color(0x2A1F7A))!.draw(in: body, angle: -90)
-ctx.restoreGState()
-
-// Crescent: full circle with an offset circle cut out (even-odd clip).
-let moon = NSRect(x: 262, y: 262, width: 500, height: 500)
-let bite = NSRect(x: 412, y: 372, width: 440, height: 440)
-ctx.saveGState()
-let cut = NSBezierPath(rect: NSRect(x: 0, y: 0, width: size, height: size))
-cut.append(NSBezierPath(ovalIn: bite)); cut.windingRule = .evenOdd; cut.addClip()
-color(0xFFFFFF).setFill(); NSBezierPath(ovalIn: moon).fill()
-ctx.restoreGState()
-
-// One four-point sparkle in the moon's opening.
-let c = NSPoint(x: 668, y: 640), r: CGFloat = 70, w = r * 0.2
-let star = NSBezierPath()
-star.move(to: NSPoint(x: c.x, y: c.y + r))
-star.curve(to: NSPoint(x: c.x + r, y: c.y), controlPoint1: NSPoint(x: c.x + w, y: c.y + w), controlPoint2: NSPoint(x: c.x + w, y: c.y + w))
-star.curve(to: NSPoint(x: c.x, y: c.y - r), controlPoint1: NSPoint(x: c.x + w, y: c.y - w), controlPoint2: NSPoint(x: c.x + w, y: c.y - w))
-star.curve(to: NSPoint(x: c.x - r, y: c.y), controlPoint1: NSPoint(x: c.x - w, y: c.y - w), controlPoint2: NSPoint(x: c.x - w, y: c.y - w))
-star.curve(to: NSPoint(x: c.x, y: c.y + r), controlPoint1: NSPoint(x: c.x - w, y: c.y + w), controlPoint2: NSPoint(x: c.x - w, y: c.y + w))
-color(0xFFFFFF).setFill(); star.fill()
+let scale = body.width * 0.62 / 68
+ctx.translateBy(x: body.midX - 34 * scale, y: body.midY + 29 * scale)
+ctx.scaleBy(x: scale, y: -scale)
+ctx.translateBy(x: -16, y: -22)
+ctx.setFillColor(CGColor(gray: 0, alpha: 1))
+ctx.addPath(mark)
+ctx.fillPath()
 
 NSGraphicsContext.current = nil
 try! rep.representation(using: .png, properties: [:])!.write(to: URL(fileURLWithPath: out))

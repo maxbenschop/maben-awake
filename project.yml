@@ -1,0 +1,69 @@
+# Xcode project for the release build only (./release.sh). Day-to-day building
+# uses SwiftPM (./build.sh). Generated with xcodegen; the .xcodeproj is not kept.
+name: MabenAwake
+options:
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MACOSX_DEPLOYMENT_TARGET: "13.0"
+    ENABLE_HARDENED_RUNTIME: "YES"
+    DEBUG_INFORMATION_FORMAT: dwarf
+    DEAD_CODE_STRIPPING: "YES"
+targets:
+  MabenAwake:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Sleepwalker
+      - path: Resources/awake
+        buildPhase: resources
+      - path: Resources/install-lid-helper.sh
+        buildPhase: resources
+      - path: Resources/install-failsafe.sh
+        buildPhase: resources
+      - path: build/AppIcon.icns
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: Maben Awake
+        EXECUTABLE_NAME: Sleepwalker        # the codename stays the process name
+        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker
+        INFOPLIST_FILE: build/Info-release.plist
+        GENERATE_INFOPLIST_FILE: "NO"
+        CODE_SIGN_ENTITLEMENTS: Release.entitlements
+    dependencies:
+      - sdk: IOKit.framework
+      - target: Hook
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+      - target: Failsafe
+        embed: true
+        codeSign: true
+        copy:
+          destination: executables
+  Hook:
+    type: tool
+    platform: macOS
+    sources: [Sources/SleepwalkerHook]
+    settings:
+      base:
+        PRODUCT_NAME: sleepwalker-hook
+        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker.hook
+        SKIP_INSTALL: "YES"
+  Failsafe:
+    type: tool
+    platform: macOS
+    sources: [Sources/SleepwalkerFailsafe]
+    settings:
+      base:
+        PRODUCT_NAME: sleepwalker-failsafe
+        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker.failsafe
+        SKIP_INSTALL: "YES"
+    dependencies:
+      - sdk: IOKit.framework
+      - sdk: SystemConfiguration.framework

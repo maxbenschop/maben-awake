@@ -3,9 +3,9 @@
 <plist version="1.0">
 <dict>
     <key>CFBundleName</key>
-    <string>Sleepwalker</string>
+    <string>Maben Awake</string>
     <key>CFBundleDisplayName</key>
-    <string>Sleepwalker</string>
+    <string>Maben Awake</string>
     <key>CFBundleIdentifier</key>
     <string>com.maxbenschop.sleepwalker</string>
     <key>CFBundleExecutable</key>
@@ -15,7 +15,7 @@
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>0.2</string>
+    <string>1.0</string>
     <key>CFBundleVersion</key>
     <string>2</string>
     <key>LSMinimumSystemVersion</key>
@@ -28,6 +28,8 @@
     <string>NSApplication</string>
     <key>NSHighResolutionCapable</key>
     <true/>
+    <key>NSAppleEventsUsageDescription</key>
+    <string>Maben Awake closes the browser tabs an AI opened while the lid was closed, and quits apps an AI started.</string>
     <key>NSHumanReadableCopyright</key>
     <string>© 2026 Max Benschop</string>
 </dict>

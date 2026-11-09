@@ -1,5 +1,5 @@
 #!/bin/sh
-# awake — ask Sleepwalker to keep the Mac awake and wake (unfreeze) apps.
+# awake — ask Maben Awake to keep the Mac awake and wake (unfreeze) apps.
 #
 #   awake need <app> [minutes]      unfreeze <app> for N minutes (default 10); released when your turn ends
 #   awake done <app>                let <app> freeze again
@@ -7,12 +7,12 @@
 #   awake release <name>            release a hold
 #   awake run <name> -- <cmd...>    keep awake while <cmd> runs
 #   awake list                      show active holds
-#   awake log [lines]               why Sleepwalker kept the Mac awake (or didn't), sleeps and wakes
+#   awake log [lines]               why Maben Awake kept the Mac awake (or didn't), sleeps and wakes
 #   awake sleeplog [lines]          macOS's own record of real sleeps and wakes (pmset log)
 #   awake hook                      used by Claude Code hooks (reads hook JSON on stdin)
 #
 # Holds are files in ~/Library/Application Support/Sleepwalker/leases/<name>
-# containing "<expiry-timestamp> <owner-pid> [app]". Sleepwalker.app watches
+# containing "<expiry-timestamp> <owner-pid> [app]". Maben Awake.app watches
 # that folder and drops a hold once it expires or its owner process exits.
 set -e
 DIR="${SLEEPWALKER_LEASES:-$HOME/Library/Application Support/Sleepwalker/leases}"

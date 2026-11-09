@@ -159,7 +159,7 @@ private struct QuickToggles: View {
             .disabled(!Brightness.isAvailable)
             if model.lidHelperInstalled {
                 Tile(title: "Lid closed", symbol: "laptopcomputer", isOn: model.lidClosedMode,
-                     help: "Stay awake with the lid closed while Sleepwalker keeps the Mac awake. Turns off below \(model.batteryCutoff)% battery.") {
+                     help: "Stay awake with the lid closed while Maben Awake keeps the Mac awake. Turns off below \(model.batteryCutoff)% battery.") {
                     model.lidClosedMode.toggle()
                 }
             } else {
@@ -367,7 +367,7 @@ private struct AppRow: View {
                 Image(systemName: "snowflake")
                     .font(.system(size: 10, weight: .semibold))
                     .foregroundStyle(.cyan)
-                    .help("Frozen by Sleepwalker while the lid is closed")
+                    .help("Frozen by Maben Awake while the lid is closed")
             }
             Spacer(minLength: 6)
             ModeMenu(bundleID: app.bundleID)
@@ -459,7 +459,7 @@ private struct Footer: View {
             FooterButton(title: "Settings…", symbol: "gearshape", action: openSettings)
                 .keyboardShortcut(",", modifiers: .command)
             Spacer()
-            FooterButton(title: "Quit Sleepwalker", symbol: "power") { NSApp.terminate(nil) }
+            FooterButton(title: "Quit Maben Awake", symbol: "power") { NSApp.terminate(nil) }
                 .keyboardShortcut("q", modifiers: .command)
                 .help("Quit. Frozen apps are thawed and normal sleep is restored.")
         }

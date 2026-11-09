@@ -7,6 +7,7 @@ import SwiftUI
 @MainActor
 final class SettingsWindowController: NSWindowController, NSWindowDelegate {
     static let shared = SettingsWindowController(model: .shared)
+    private let tabs: NSTabViewController
 
     init(model: Model) {
         let tabs = SettingsTabs()
@@ -25,6 +26,7 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
         window.styleMask = [.titled, .closable]
         window.toolbarStyle = .preference
         window.isReleasedWhenClosed = false
+        self.tabs = tabs
         super.init(window: window)
         window.delegate = self
         tabs.fitWindow()
@@ -32,7 +34,9 @@ final class SettingsWindowController: NSWindowController, NSWindowDelegate {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    func show() {
+    /// Brings Settings to the front, optionally on a given tab.
+    func show(_ pane: SettingsPane? = nil) {
+        if let pane, let index = SettingsPane.allCases.firstIndex(of: pane) { tabs.selectedTabViewItemIndex = index }
         if window?.isVisible != true { window?.center() }
         // A menu bar app has no Dock icon; show one while Settings is open so
         // it can be found with ⌘-Tab.

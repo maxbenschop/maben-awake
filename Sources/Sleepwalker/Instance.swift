@@ -68,7 +68,7 @@ enum Instance {
         }
         let plist: [String: Any] = [
             "Label": agentLabel,
-            "ProgramArguments": [Bundle.main.executablePath ?? "/Applications/Sleepwalker.app/Contents/MacOS/Sleepwalker"],
+            "ProgramArguments": [Bundle.main.executablePath ?? "/Applications/Maben Awake.app/Contents/MacOS/Sleepwalker"],
             "AssociatedBundleIdentifiers": [Bundle.main.bundleIdentifier ?? "com.maxbenschop.sleepwalker"],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],   // restart after crash, not after Quit

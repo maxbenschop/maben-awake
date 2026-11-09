@@ -54,7 +54,7 @@ enum Failsafe {
     static func install(completion: @escaping @Sendable (Bool) -> Void) {
         guard let cmd = installCommand else { completion(false); return }
         let source = "do shell script \"\(cmd.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" "
-            + "with prompt \"Sleepwalker wants to install its lid-open failsafe, which turns the screen back on and unfreezes apps if Sleepwalker ever gets stuck.\" "
+            + "with prompt \"Maben Awake wants to install its lid-open failsafe, which turns the screen back on and unfreezes apps if Maben Awake ever gets stuck.\" "
             + "with administrator privileges"
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")

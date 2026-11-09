@@ -171,11 +171,13 @@ final class Model: ObservableObject {
         isPreview = false
         keepAwake = defaults.bool(forKey: "keepAwake")
         onlyWhileCheckedRunning = defaults.bool(forKey: "onlyWhileCheckedRunning")
-        pauseOthers = defaults.bool(forKey: "pauseOthers")
+        // On by default: it only ever applies with the lid closed, which needs the
+        // one-time lid setup (and that installs the lid-open failsafe with it).
+        pauseOthers = defaults.object(forKey: "pauseOthers") as? Bool ?? true
         lidClosedMode = defaults.object(forKey: "lidClosedMode") as? Bool ?? true
         dimWhenClosed = defaults.object(forKey: "dimWhenClosed") as? Bool ?? true
         keepUnlockedWhenClosed = defaults.object(forKey: "keepUnlockedWhenClosed") as? Bool ?? true
-        batteryCutoff = defaults.object(forKey: "batteryCutoff") as? Int ?? 10
+        batteryCutoff = defaults.object(forKey: "batteryCutoff") as? Int ?? 20
         checked = Set(defaults.stringArray(forKey: "checked") ?? [])
         aiOnly = Set(defaults.stringArray(forKey: "aiOnly") ?? [])
         explicitOnDemand = Set(defaults.stringArray(forKey: "explicitOnDemand") ?? [])
@@ -273,7 +275,7 @@ final class Model: ObservableObject {
         dimWhenClosed = true
         keepUnlockedWhenClosed = true
         lidClosedMode = true
-        batteryCutoff = 10
+        batteryCutoff = 20
         checked = Set(modes.filter { $0.value == .always }.keys)
         aiOnly = Set(modes.filter { $0.value == .whileAI }.keys)
         explicitOnDemand = Set(modes.filter { $0.value == .onDemand }.keys)
@@ -756,7 +758,7 @@ final class Model: ObservableObject {
         let ok = IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleSystemSleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            "Sleepwalker: keeping Mac awake for selected apps" as CFString,
+            "Maben Awake: keeping Mac awake for selected apps" as CFString,
             &assertionID
         )
         isAsserting = ok == kIOReturnSuccess
@@ -774,7 +776,7 @@ final class Model: ObservableObject {
         IOPMAssertionCreateWithName(
             kIOPMAssertionTypePreventUserIdleDisplaySleep as CFString,
             IOPMAssertionLevel(kIOPMAssertionLevelOn),
-            "Sleepwalker: keeping the screen unlocked while the lid is closed" as CFString,
+            "Maben Awake: keeping the screen unlocked while the lid is closed" as CFString,
             &displayAssertionID
         )
     }

@@ -45,7 +45,7 @@ struct GeneralPane: View {
             Section {
                 Toggle(isOn: $model.keepAwake) {
                     Text("Keep Mac awake manually")
-                    Text("Without this, Sleepwalker only keeps the Mac awake while an AI asks for it.")
+                    Text("Without this, Maben Awake only keeps the Mac awake while an AI asks for it.")
                 }
                 Toggle(isOn: $model.onlyWhileCheckedRunning) {
                     Text("Only while an \"Always on\" app is running")
@@ -61,7 +61,7 @@ struct GeneralPane: View {
             Section("Startup") {
                 Toggle(isOn: $model.launchAtLogin) {
                     Text("Open at login")
-                    Text("Also restarts Sleepwalker within seconds if it crashes, thawing any frozen apps.")
+                    Text("Also restarts Maben Awake within seconds if it crashes, thawing any frozen apps.")
                 }
             }
         }
@@ -123,7 +123,7 @@ struct AppsPane: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Choose what happens to each app while the lid is closed and Sleepwalker keeps the Mac awake.")
+                Text("Choose what happens to each app while the lid is closed and Maben Awake keeps the Mac awake.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -238,7 +238,7 @@ struct LidPane: View {
                 if model.lidHelperInstalled {
                     Toggle(isOn: $model.lidClosedMode) {
                         Text("Stay awake with the lid closed")
-                        Text("Only while Sleepwalker is keeping the Mac awake. Quitting always restores normal lid sleep.")
+                        Text("Only while Maben Awake is keeping the Mac awake. Quitting always restores normal lid sleep.")
                     }
                     Picker(selection: $model.batteryCutoff) {
                         ForEach([5, 10, 20, 30], id: \.self) { Text("Below \($0)%").tag($0) }
@@ -282,7 +282,7 @@ struct LidPane: View {
                     }
                 } label: {
                     Text("Lid-open failsafe")
-                    Text("A small background service that turns the screen back on and unfreezes apps when you open the lid, even if Sleepwalker gets stuck. Asks for your password once.")
+                    Text("A small background service that turns the screen back on and unfreezes apps when you open the lid, even if Maben Awake gets stuck. Asks for your password once.")
                 }
             } header: {
                 Text("Safety")
@@ -307,7 +307,7 @@ struct LidPane: View {
             } header: {
                 Text("While the Lid Is Closed")
             } footer: {
-                Text("With an external display connected, nothing is frozen or dimmed. If the Mac gets seriously hot with the lid closed, Sleepwalker lets it sleep to cool down.")
+                Text("With an external display connected, nothing is frozen or dimmed. If the Mac gets seriously hot with the lid closed, Maben Awake lets it sleep to cool down.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .multilineTextAlignment(.leading)
@@ -326,27 +326,84 @@ struct LidPane: View {
 struct AIPane: View {
     @EnvironmentObject private var model: Model
     @State private var cliPath = Integration.cliPath
+    @State private var cliStatus = Integration.cliStatus
     @State private var hooked = Integration.hookedSettingsFiles
+    @State private var hooksStatus = Integration.hooksStatus
+    @State private var problem: String?
+    @State private var busy = false
+
+    private var canInstall: Bool { Integration.isInApplications }
+
+    private func refresh() {
+        cliPath = Integration.cliPath
+        cliStatus = Integration.cliStatus
+        hooked = Integration.hookedSettingsFiles
+        hooksStatus = Integration.hooksStatus
+    }
+
+    private func setHooks(install: Bool) {
+        do {
+            if install { try Integration.installHooks() } else { try Integration.removeHooks() }
+            problem = nil
+        } catch {
+            problem = error.localizedDescription
+        }
+        refresh()
+    }
+
+    private func setCLI(install: Bool) {
+        busy = true
+        let done: @MainActor (Bool) -> Void = { ok in
+            busy = false
+            problem = ok ? nil : (install ? "The awake command wasn't added." : "The awake command wasn't removed.")
+            refresh()
+        }
+        if install { Integration.installCLI(completion: done) } else { Integration.removeCLI(completion: done) }
+    }
 
     var body: some View {
         Form {
             Section {
                 LabeledContent {
-                    StatusPill(ok: !hooked.isEmpty)
+                    StatusPill(status: hooksStatus)
+                    switch hooksStatus {
+                    case .missing: Button("Install") { setHooks(install: true) }.disabled(!canInstall)
+                    case .outdated: Button("Update") { setHooks(install: true) }.disabled(!canInstall)
+                    case .installed: Button("Remove") { setHooks(install: false) }
+                    }
                 } label: {
                     Text("Claude Code hooks")
                     Text(hooked.isEmpty
-                         ? "Run ./build.sh install to keep the Mac awake while Claude works."
-                         : hooked.map { "~/" + $0.deletingLastPathComponent().lastPathComponent + "/settings.json" }.joined(separator: ", "))
+                         ? "Keeps the Mac awake while Claude Code or T3 Code works. Adds five entries to ~/.claude/settings.json."
+                         : hooked.map(Integration.tilde).joined(separator: ", "))
                 }
                 LabeledContent {
-                    StatusPill(ok: cliPath != nil)
+                    StatusPill(status: cliStatus)
+                    switch cliStatus {
+                    case .missing: Button("Install") { setCLI(install: true) }.disabled(!canInstall || busy)
+                    case .outdated: Button("Update") { setCLI(install: true) }.disabled(!canInstall || busy)
+                    case .installed: Button("Remove") { setCLI(install: false) }.disabled(busy)
+                    }
                 } label: {
                     Text("awake command")
-                    Text(cliPath ?? "Not linked. Run ./build.sh install.")
+                    Text(cliPath ?? "For scripts and other AI tools: awake run, awake hold, awake need.")
                 }
             } header: {
                 Text("Integration")
+            } footer: {
+                if let problem {
+                    Label(problem, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if !canInstall {
+                    Label("Move Maben Awake to your Applications folder and open it from there to install these.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else if hooksStatus == .outdated || cliStatus == .outdated {
+                    Text("Outdated means it points at another copy of the app. Update moves it to this one.")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
             }
 
             Section("Active Requests") {
@@ -393,19 +450,17 @@ struct AIPane: View {
         .formStyle(.grouped)
         .frame(width: paneWidth)
         .fixedSize(horizontal: false, vertical: true)
-        .onAppear {
-            cliPath = Integration.cliPath
-            hooked = Integration.hookedSettingsFiles
-        }
+        .onAppear { refresh() }
     }
 }
 
 private struct StatusPill: View {
-    let ok: Bool
+    let status: Integration.Status
     var body: some View {
-        Label(ok ? "Installed" : "Missing", systemImage: ok ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+        Label(status == .installed ? "Installed" : status == .outdated ? "Outdated" : "Not installed",
+              systemImage: status == .installed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
             .font(.callout)
-            .foregroundStyle(ok ? .green : .orange)
+            .foregroundStyle(status == .installed ? .green : .orange)
     }
 }
 
@@ -449,7 +504,7 @@ struct AboutPane: View {
             Image(nsImage: NSImage(named: "AppIcon") ?? NSApp.applicationIconImage)
                 .resizable()
                 .frame(width: 88, height: 88)
-            Text("Sleepwalker")
+            Text("Maben Awake")
                 .font(.system(size: 20, weight: .semibold))
             Text(version)
                 .font(.callout)
