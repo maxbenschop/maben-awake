@@ -150,7 +150,7 @@ struct AppsPane: View {
                             HStack(spacing: 5) {
                                 Text(row.name).lineLimit(1)
                                 if row.frozen {
-                                    Image(systemName: "snowflake").font(.caption).foregroundStyle(.cyan)
+                                    FreezeGlyph(size: 11, lineWidth: 2.2).foregroundStyle(.cyan)
                                         .help("Frozen right now")
                                 }
                             }

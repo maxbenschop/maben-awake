@@ -146,7 +146,7 @@ private struct QuickToggles: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Tile(title: "Freeze apps", symbol: "snowflake", isOn: model.pauseOthers,
+            Tile(title: "Freeze apps", symbol: "maben.freeze", isOn: model.pauseOthers,
                  help: "While the lid is closed, freeze apps no AI needs right now.") {
                 model.pauseOthers.toggle()
             }
@@ -187,9 +187,14 @@ private struct Tile: View {
                 ZStack {
                     Circle()
                         .fill(isOn ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(.quaternary))
-                    Image(systemName: symbol)
-                        .font(.system(size: 12, weight: .semibold))
-                        .foregroundStyle(isOn ? Color.white : Color.primary.opacity(0.75))
+                    Group {
+                        if symbol == "maben.freeze" {
+                            FreezeGlyph(size: 15, lineWidth: 2.1)
+                        } else {
+                            Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
+                        }
+                    }
+                    .foregroundStyle(isOn ? Color.white : Color.primary.opacity(0.75))
                 }
                 .frame(width: 28, height: 28)
                 Text(title)
@@ -331,7 +336,7 @@ private struct AppList: View {
         VStack(alignment: .leading, spacing: 4) {
             SectionHeader(title: "Apps") {
                 if model.frozenCount > 0 {
-                    Label("\(model.frozenCount) frozen", systemImage: "snowflake")
+                    Label { Text("\(model.frozenCount) frozen") } icon: { FreezeGlyph(size: 11) }
                         .font(.system(size: 11))
                         .foregroundStyle(.cyan)
                 }
@@ -364,8 +369,7 @@ private struct AppRow: View {
                 .lineLimit(1)
                 .foregroundStyle(app.isPaused ? .secondary : .primary)
             if app.isPaused {
-                Image(systemName: "snowflake")
-                    .font(.system(size: 10, weight: .semibold))
+                FreezeGlyph(size: 11, lineWidth: 2.2)
                     .foregroundStyle(.cyan)
                     .help("Frozen by Maben Awake while the lid is closed")
             }
