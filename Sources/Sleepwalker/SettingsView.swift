@@ -411,7 +411,7 @@ struct LidPane: View {
                 } else {
                     MBRow(icon: "laptopcomputer", title: "Stay awake with the lid closed",
                           detail: "Asks for your password once.",
-                          info: "macOS ignores keep-awake requests when the lid closes. Setup allows exactly one command without a password: pmset disablesleep.") {
+                          info: "macOS ignores keep-awake requests when the lid closes. Setup lets Maben Awake run exactly one command, pmset disablesleep, without asking you again.") {
                         Button("Set up") { model.installLidHelper() }.buttonStyle(.mbPrimary)
                     }
                 }
