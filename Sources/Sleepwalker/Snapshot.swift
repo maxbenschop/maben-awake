@@ -7,6 +7,59 @@ import SwiftUI
 /// power settings or a running Sleepwalker.
 @MainActor
 enum Snapshot {
+    /// `Sleepwalker --preview-settings` (debug builds): opens only the Settings
+    /// window with canned data, to try it out next to the installed app. Nothing
+    /// is frozen and no real settings are changed.
+    static func previewSettingsIfRequested() {
+        guard CommandLine.arguments.contains("--preview-settings") else { return }
+        let app = NSApplication.shared
+        app.setActivationPolicy(.regular)
+        func icon(_ id: String) -> NSImage? {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { NSWorkspace.shared.icon(forFile: $0.path) }
+        }
+        let apps: [(String, String, Bool)] = [
+            ("Dia", "company.thebrowser.dia", false), ("Docker", "com.docker.docker", false),
+            ("Figma", "com.figma.desktop", true), ("Mail", "com.apple.mail", false),
+            ("Notes", "com.apple.Notes", true), ("Spotify", "com.spotify.client", false),
+            ("Terminal", "com.apple.Terminal", false), ("Xcode", "com.apple.dt.Xcode", false),
+        ]
+        let entries = apps.enumerated().map { n, a in
+            AppEntry(id: pid_t(100 + n), bundleID: a.1, name: a.0, icon: icon(a.1), isPaused: a.2)
+        }
+        let now = Date()
+        let leases = [Lease(name: "claude-3f2a", expires: now + 540, app: nil, owner: 0),
+                      Lease(name: "need-Dia-4411", expires: now + 425, app: "Dia", owner: 0)]
+        let model = Model(preview: entries, leases: leases, asserting: true, away: true,
+                          modes: ["com.docker.docker": .always, "com.figma.desktop": .whileAI])
+        let controller = SettingsWindowController(model: model)
+        controller.window?.title = "Maben Awake Settings (preview)"
+        controller.window?.setFrameAutosaveName("")
+        controller.window?.center()
+        controller.window?.makeKeyAndOrderFront(nil)
+        controller.window?.makeFirstResponder(nil)
+        app.activate(ignoringOtherApps: true)
+        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: controller.window, queue: .main) { _ in exit(0) }
+        withExtendedLifetime(controller) { app.run() }
+        exit(0)
+    }
+
+    /// `Sleepwalker --verify-update <app> <version>` (debug): runs the updater's checks on an app and prints the result.
+    static func verifyUpdateIfRequested() {
+        let args = CommandLine.arguments
+        guard let i = args.firstIndex(of: "--verify-update"), i + 2 < args.count else { return }
+        do {
+            try Updater.verify(URL(fileURLWithPath: args[i + 1]), expectedVersion: args[i + 2])
+            print("ACCEPTED")
+        } catch {
+            print("REJECTED: \((error as? Updater.Failure)?.message ?? "\(error)")")
+        }
+        let sample = #"{"tag_name":"v1.4.1","draft":false,"prerelease":false,"html_url":"https://github.com/x/y/releases/tag/v1.4.1","body":"- Fix","assets":[{"name":"Maben-Awake.dmg","browser_download_url":"https://e/a.dmg"},{"name":"Maben-Awake.zip","browser_download_url":"https://e/a.zip"}]}"#
+        let r = Updater.parse(Data(sample.utf8))
+        print("parse:", r?.version ?? "nil", r?.zip.absoluteString ?? "", "newer than 1.4:", Updater.isNewer(r?.version ?? "0", than: "1.4"))
+        print("prerelease ignored:", Updater.parse(Data(sample.replacingOccurrences(of: #""prerelease":false"#, with: #""prerelease":true"#).utf8)) == nil)
+        exit(0)
+    }
+
     static func runIfRequested() {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }
@@ -51,21 +104,25 @@ enum Snapshot {
             }
             render(LidPane().environmentObject(idle), "settings-lid-nohelper-\(suffix)", appearance, dir)
         }
-        // The real Settings window: switch through every tab.
+        // The real Settings window: every page, light and dark.
         let controller = SettingsWindowController(model: busy)
-        if let window = controller.window, let tabs = window.contentViewController as? NSTabViewController {
-            window.appearance = NSAppearance(named: .aqua)
-            for (i, pane) in SettingsPane.allCases.enumerated() {
-                tabs.selectedTabViewItemIndex = i
-                RunLoop.main.run(until: Date() + 0.4)
-                print("window \(pane.rawValue): title=\(window.title) size=\(window.frame.size)")
-                if let view = window.contentView,
-                   let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
-                    view.cacheDisplay(in: view.bounds, to: rep)
-                    try? rep.representation(using: .png, properties: [:])?
-                        .write(to: dir.appendingPathComponent("window-\(pane.rawValue).png"))
+        if let window = controller.window {
+            for appearance in [NSAppearance.Name.aqua, .darkAqua] {
+                window.appearance = NSAppearance(named: appearance)
+                window.orderFrontRegardless()
+                for pane in SettingsPane.allCases {
+                    controller.navigation.pane = pane
+                    RunLoop.main.run(until: Date() + 0.4)
+                    if let view = window.contentView?.superview ?? window.contentView,
+                       let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) {
+                        view.cacheDisplay(in: view.bounds, to: rep)
+                        let suffix = appearance == .aqua ? "light" : "dark"
+                        try? rep.representation(using: .png, properties: [:])?
+                            .write(to: dir.appendingPathComponent("window-\(pane.rawValue)-\(suffix).png"))
+                    }
                 }
             }
+            window.orderOut(nil)
         }
         print("Snapshots written to \(dir.path)")
         exit(0)

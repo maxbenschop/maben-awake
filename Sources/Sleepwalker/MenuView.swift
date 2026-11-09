@@ -40,6 +40,10 @@ struct MenuView: View {
         }
         .frame(width: 360)
         .fixedSize(horizontal: false, vertical: true)
+        // Same Maben look as Settings and the website: dark, with Awake green as the accent.
+        .background(MB.bg.opacity(0.92))
+        .environment(\.colorScheme, .dark)
+        .tint(MB.green)
         .background(GeometryReader { geo in WindowFitter(height: geo.size.height) })
     }
 
@@ -113,7 +117,7 @@ struct StateBadge: View {
             Circle().fill(tint.gradient)
             Image(systemName: symbol)
                 .font(.system(size: size * 0.44, weight: .semibold))
-                .foregroundStyle(.white)
+                .foregroundStyle(state == .awake || state == .aiWorking ? Color.black : Color.white)
         }
         .frame(width: size, height: size)
         .shadow(color: tint.opacity(0.35), radius: 3, y: 1)
@@ -132,8 +136,8 @@ struct StateBadge: View {
     private var tint: Color {
         switch state {
         case .idle: Color(nsColor: .systemGray)
-        case .awake: .indigo
-        case .aiWorking: .purple
+        case .awake: MB.green
+        case .aiWorking: MB.green
         case .overheated: .red
         }
     }
@@ -186,7 +190,7 @@ private struct Tile: View {
             VStack(spacing: 5) {
                 ZStack {
                     Circle()
-                        .fill(isOn ? AnyShapeStyle(Color.accentColor.gradient) : AnyShapeStyle(.quaternary))
+                        .fill(isOn ? AnyShapeStyle(MB.green.gradient) : AnyShapeStyle(.quaternary))
                     Group {
                         if symbol == "maben.freeze" {
                             FreezeGlyph(size: 15, lineWidth: 2.1)
@@ -194,7 +198,7 @@ private struct Tile: View {
                             Image(systemName: symbol).font(.system(size: 12, weight: .semibold))
                         }
                     }
-                    .foregroundStyle(isOn ? Color.white : Color.primary.opacity(0.75))
+                    .foregroundStyle(isOn ? Color.black : Color.primary.opacity(0.75))
                 }
                 .frame(width: 28, height: 28)
                 Text(title)
@@ -223,9 +227,13 @@ private struct Tile: View {
 
 private struct Notices: View {
     @EnvironmentObject private var model: Model
+    @ObservedObject private var updater = Updater.shared
 
     var body: some View {
         VStack(spacing: 6) {
+            if let release = updater.available {
+                UpdateNotice(release: release)
+            }
             if model.overheated {
                 Notice(symbol: "thermometer.high", tint: .red,
                        text: "Too hot with the lid closed. Sleep is allowed until you open it.")
@@ -237,7 +245,42 @@ private struct Notices: View {
             }
         }
         .padding(.horizontal, 14)
-        .padding(.bottom, model.overheated || model.recoveredFromCrash ? 12 : 0)
+        .padding(.bottom, model.overheated || model.recoveredFromCrash || updater.available != nil ? 12 : 0)
+    }
+}
+
+/// "Maben Awake 1.5 is available" with an Update button, at the top of the menu.
+private struct UpdateNotice: View {
+    @ObservedObject private var updater = Updater.shared
+    let release: Updater.Release
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Image(systemName: "arrow.down.circle.fill").foregroundStyle(MB.green).font(.system(size: 15))
+            VStack(alignment: .leading, spacing: 1) {
+                Text("Version \(release.version) is available").font(.system(size: 12, weight: .semibold))
+                Text(detail).font(.system(size: 11)).foregroundStyle(.secondary)
+            }
+            Spacer()
+            if case .available = updater.state {
+                Button("Update") { updater.install() }
+                    .buttonStyle(.mbPrimary)
+                    .disabled(!updater.canInstall)
+            } else {
+                ProgressView().controlSize(.small)
+            }
+        }
+        .padding(10)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(MB.green.opacity(0.1)))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(MB.green.opacity(0.3)))
+    }
+
+    private var detail: String {
+        switch updater.state {
+        case .downloading(_, let p): "Downloading… \(Int(p * 100))%"
+        case .installing: "Installing, restarts in a moment"
+        default: updater.canInstall ? "Installs in a few seconds and restarts" : "Move the app to Applications to update"
+        }
     }
 }
 
@@ -299,9 +342,9 @@ private struct LeaseRow: View {
         HStack(spacing: 9) {
             Image(systemName: lease.symbol)
                 .font(.system(size: 11, weight: .semibold))
-                .foregroundStyle(.purple)
+                .foregroundStyle(MB.text)
                 .frame(width: 22, height: 22)
-                .background(Circle().fill(Color.purple.opacity(0.14)))
+                .background(Circle().fill(Color.white.opacity(0.08)))
             Text(lease.title)
                 .font(.system(size: 12.5))
                 .lineLimit(1)
@@ -338,7 +381,7 @@ private struct AppList: View {
                 if model.frozenCount > 0 {
                     Label { Text("\(model.frozenCount) frozen") } icon: { FreezeGlyph(size: 11) }
                         .font(.system(size: 11))
-                        .foregroundStyle(.cyan)
+                        .foregroundStyle(MB.cold)
                 }
             }
             VStack(spacing: 2) {
@@ -370,7 +413,7 @@ private struct AppRow: View {
                 .foregroundStyle(app.isPaused ? .secondary : .primary)
             if app.isPaused {
                 FreezeGlyph(size: 11, lineWidth: 2.2)
-                    .foregroundStyle(.cyan)
+                    .foregroundStyle(MB.cold)
                     .help("Frozen by Maben Awake while the lid is closed")
             }
             Spacer(minLength: 6)
@@ -415,6 +458,7 @@ struct ModeMenu: View {
         }
         .menuStyle(.borderlessButton)
         .controlSize(.small)
+        .tint(MB.text)
         .fixedSize()
         .help("\(mode.label): \(mode.explanation.replacingOccurrences(of: "`", with: ""))")
     }

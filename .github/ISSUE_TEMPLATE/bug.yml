@@ -1,0 +1,29 @@
+name: Bug report
+description: Something doesn't work as it should
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Maben Awake version
+      description: Settings › About
+      placeholder: "1.4"
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and Mac
+      placeholder: macOS 15.5, MacBook Air M3
+  - type: textarea
+    id: log
+    attributes:
+      label: awake log
+      description: Output of `awake log` around the time it happened. Remove anything private.
+      render: text

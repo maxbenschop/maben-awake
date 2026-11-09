@@ -7,9 +7,13 @@ import AppKit
 enum MenuIcon {
     enum State { case idle, awake, aiWorking, overheated }
 
-    static func image(_ state: State) -> NSImage {
+    /// Awake green, used for the icon while an update is waiting.
+    static let updateTint = NSColor(srgbRed: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255, alpha: 1)
+
+    /// `tint`: draw in that colour instead of as a template (used when an update is available).
+    static func image(_ state: State, tint: NSColor? = nil) -> NSImage {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
-            NSColor.black.set()
+            (tint ?? NSColor.black).set()
             let moon = crescent(center: NSPoint(x: 8, y: 8.5), radius: 6.5,
                                 bite: NSPoint(x: 12, y: 11.5), biteRadius: 5.6)
             switch state {
@@ -26,7 +30,7 @@ enum MenuIcon {
             }
             return true
         }
-        image.isTemplate = true
+        image.isTemplate = tint == nil
         return image
     }
 
