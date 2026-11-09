@@ -3,7 +3,7 @@
 A tiny macOS menu bar app: keep the Mac awake for the apps your AI agent needs
 (T3 Code, Dia, Docker…) and freeze everything else so it uses no CPU.
 
-Part of [Maben](https://maben.gg). Product colour: Awake violet `#9F7BFF` with a
+Part of [Maben](https://maben.gg). Product colour: Awake green `#30D158` with a
 black mark. Website: `awake-site/` in the Maben folder (awake.maben.gg).
 
 The app was called Sleepwalker before it joined Maben, and that name stays as

@@ -1,5 +1,5 @@
 // Renders the Maben Awake app icon: swift Resources/make-icon.swift <out.png>
-// A Maben product icon: the Gate mark in black on Awake violet (#9F7BFF),
+// A Maben product icon: the Gate mark in black on Awake green (#30D158),
 // on Apple's Mac icon grid (824pt body, 100pt margin). Mark width is 62% of
 // the body and the corner radius 22.5%, as in the Maben brand guidelines.
 import AppKit
@@ -15,7 +15,7 @@ let ctx = NSGraphicsContext.current!.cgContext
 
 let body = CGRect(x: 100, y: 100, width: 824, height: 824)
 let radius = body.width * 0.225
-ctx.setFillColor(CGColor(srgbRed: 0x9F / 255, green: 0x7B / 255, blue: 0xFF / 255, alpha: 1))
+ctx.setFillColor(CGColor(srgbRed: 0x30 / 255, green: 0xD1 / 255, blue: 0x58 / 255, alpha: 1))
 ctx.addPath(CGPath(roundedRect: body, cornerWidth: radius, cornerHeight: radius, transform: nil))
 ctx.fillPath()
 
