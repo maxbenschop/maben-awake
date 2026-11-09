@@ -25,18 +25,35 @@ unchanged, so an existing install keeps its data. `./build.sh install` replaces
 
 Needs Xcode command line tools (`xcode-select --install`). macOS 13+.
 
+## Updates
+
+The app updates itself from GitHub Releases (`Sources/Sleepwalker/Updater.swift`):
+
+1. At start and every 6 hours it asks the GitHub API for the latest release (never drafts or pre-releases).
+2. If its tag `vX.Y.Z` is newer, the menu bar icon turns green and the menu and Settings › General show an
+   Update button. With "Install updates automatically" on (default), it installs by itself once the lid is
+   open and no agent is working.
+3. It downloads `Maben-Awake.zip` from that release, and only installs it if the app inside is signed with
+   the Developer ID of team NJTYRVLSA8 with this bundle ID, accepted by Gatekeeper (notarized), and has the
+   announced version. The old app goes to the Trash.
+4. It wakes every frozen app, restores sleep and brightness, and restarts as the new version.
+
+The website's download buttons go to `/download/latest.dmg`, which the web server redirects to
+`releases/latest/download/Maben-Awake.dmg` on GitHub, so they always serve the newest release.
+
+See `CONTRIBUTING.md` for branches, pull requests and the rules on `main`.
+
 ## Release
 
-`./release.sh` builds `dist/Maben-Awake-<version>.dmg` (drag to Applications) and `.zip` for the public download: universal (Apple silicon and
+`./release.sh` builds `dist/Maben-Awake.dmg` (drag to Applications) and `dist/Maben-Awake.zip` (used by the updater): universal (Apple silicon and
 Intel), hardened runtime, signed with the Developer ID of team NJTYRVLSA8 and notarized and stapled by Apple.
 It runs the installer test first, generates a throwaway Xcode project from `project.yml` (needs
 [xcodegen](https://github.com/yonaskolb/XcodeGen)) and signs and notarizes through the Apple account in Xcode,
 so nothing else needs setting up. Takes a few minutes, mostly waiting for Apple.
 
-For a new version: bump `CFBundleShortVersionString` in `Info.plist`, run `./release.sh`, copy the .dmg and
-.zip to `awake-site/download/` in the Maben folder, set the version, dates and file names in
-`awake-site-src/release.json`, add a changelog entry, run `python3 awake-site-src/build.py --hash` there (fills in
-sizes and checksums and rebuilds every page that shows them), and deploy the site.
+For a new version: bump `CFBundleShortVersionString` in `Info.plist`, add a `## <version> · <date>` section to
+`CHANGELOG.md`, merge to `main`, run `./release.sh`, then `./publish.sh`. That tags the commit, creates the GitHub
+release (notes from `CHANGELOG.md`), and rebuilds and deploys awake.maben.gg (version, checksums, changelog page).
 
 A downloaded copy sets itself up: on first start from Applications it opens Settings → AI, where the Claude
 Code hooks and the `awake` command are installed, updated or removed with a button (`Integration.swift`,

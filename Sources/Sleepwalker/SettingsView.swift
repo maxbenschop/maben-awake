@@ -8,17 +8,36 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "General"
         case .apps: "Apps"
         case .lid: "Lid & Power"
-        case .ai: "AI"
+        case .ai: "Agents"
         case .about: "About"
+        }
+    }
+    var subtitle: String {
+        switch self {
+        case .general: "When the Mac stays awake, and starting up."
+        case .apps: "What happens to each app while the lid is closed."
+        case .lid: "Keep working with the lid closed, safely."
+        case .ai: "Connect Claude Code, Codex and your scripts."
+        case .about: ""
         }
     }
     var symbol: String {
         switch self {
-        case .general: "gearshape"
-        case .apps: "square.grid.2x2"
+        case .general: "gearshape.fill"
+        case .apps: "square.grid.2x2.fill"
         case .lid: "laptopcomputer"
         case .ai: "sparkles"
-        case .about: "info.circle"
+        case .about: "info.circle.fill"
+        }
+    }
+    /// Words the sidebar search matches, besides the title.
+    var keywords: String {
+        switch self {
+        case .general: "keep awake manual login startup always on status"
+        case .apps: "freeze frozen mode always while ai request reset shield"
+        case .lid: "lid closed battery sleep failsafe brightness dim screen unlock lock heat"
+        case .ai: "agents claude code codex hooks awake command cli requests release log"
+        case .about: "version log update website github"
         }
     }
 
@@ -33,66 +52,171 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     }
 }
 
-private let paneWidth: CGFloat = 520
-
 // MARK: - General
 
 struct GeneralPane: View {
     @EnvironmentObject private var model: Model
 
     var body: some View {
-        Form {
-            Section {
-                Toggle(isOn: $model.keepAwake) {
-                    Text("Keep Mac awake manually")
-                    Text("Without this, Maben Awake only keeps the Mac awake while an AI asks for it.")
+        MBPage(title: "General", subtitle: SettingsPane.general.subtitle) {
+            StatusCard()
+
+            MBSection(title: "Keep awake") {
+                MBRow(icon: "sun.max.fill", title: "Keep the Mac awake by hand",
+                      detail: "Even when no agent is working.") {
+                    MBToggle(isOn: $model.keepAwake)
                 }
-                Toggle(isOn: $model.onlyWhileCheckedRunning) {
-                    Text("Only while an \"Always on\" app is running")
-                    Text("Apps you set to Always on yourself count; protected defaults like Mail don't.")
+                MBRow(icon: "app.badge.checkmark", title: "Only while an Always on app runs",
+                      info: "Only apps you set to Always on yourself count. Protected defaults like Mail don't.") {
+                    MBToggle(isOn: $model.onlyWhileCheckedRunning).disabled(!model.keepAwake)
                 }
-                .disabled(!model.keepAwake)
-            } header: {
-                Text("Keep Awake")
-            } footer: {
-                StatusLine()
             }
 
-            Section("Startup") {
-                Toggle(isOn: $model.launchAtLogin) {
-                    Text("Open at login")
-                    Text("Also restarts Maben Awake within seconds if it crashes, thawing any frozen apps.")
+            UpdatesSection()
+
+            MBSection(title: "Startup") {
+                MBRow(icon: "power", title: "Open at login",
+                      info: "Also restarts Maben Awake within seconds if it crashes, and wakes any frozen apps.") {
+                    MBToggle(isOn: $model.launchAtLogin)
                 }
             }
         }
-        .formStyle(.grouped)
-        .frame(width: paneWidth)
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-private struct StatusLine: View {
+/// Version, the Update button, and the two automatic-update switches.
+struct UpdatesSection: View {
+    @ObservedObject private var updater = Updater.shared
+    @State private var showNotes = false
+
+    var body: some View {
+        MBSection(title: "Updates") {
+            MBRow(icon: updater.available == nil ? "checkmark.seal.fill" : "arrow.down.circle.fill",
+                  tint: updater.available == nil ? MB.text : MB.green,
+                  title: title, detail: detail) {
+                trailing
+            }
+            MBRow(icon: "arrow.triangle.2.circlepath", title: "Check for updates automatically",
+                  info: "Asks GitHub for the latest release at start and every 6 hours. It's the only time Maben Awake connects to the internet.") {
+                MBToggle(isOn: $updater.autoCheck)
+            }
+            MBRow(icon: "square.and.arrow.down.fill", title: "Install updates automatically",
+                  info: "Only while the lid is open and no agent is working, so an update never interrupts a job. Every update is checked for the Maben signature and Apple's notarization before it's installed.") {
+                MBToggle(isOn: $updater.autoInstall).disabled(!updater.autoCheck)
+            }
+        }
+    }
+
+    private var title: String {
+        if let r = updater.available { return "Version \(r.version) is available" }
+        return "Maben Awake \(updater.currentVersion)"
+    }
+
+    private var detail: String {
+        switch updater.state {
+        case .idle: return "Not checked yet."
+        case .checking: return "Checking GitHub…"
+        case .upToDate(let date): return "Up to date. Checked \(date.formatted(.relative(presentation: .named)))."
+        case .available: return updater.canInstall ? "Installs in a few seconds, then restarts." : "Move the app to Applications to update."
+        case .downloading(_, let p): return "Downloading… \(Int(p * 100))%"
+        case .installing: return "Installing. Maben Awake restarts in a moment."
+        case .failed(let message): return message
+        }
+    }
+
+    @ViewBuilder private var trailing: some View {
+        switch updater.state {
+        case .available(let release):
+            Button("What's new") { showNotes.toggle() }
+                .buttonStyle(.mbQuiet)
+                .popover(isPresented: $showNotes, arrowEdge: .bottom) { ReleaseNotes(release: release) }
+            Button("Update") { updater.install() }.buttonStyle(.mbPrimary).disabled(!updater.canInstall)
+        case .checking, .downloading, .installing:
+            ProgressView().controlSize(.small)
+        default:
+            Button("Check now") { updater.check(userInitiated: true) }.buttonStyle(.mbQuiet)
+        }
+    }
+}
+
+private struct ReleaseNotes: View {
+    let release: Updater.Release
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Maben Awake \(release.version)").font(.system(size: 13, weight: .semibold))
+            ScrollView {
+                Text((try? AttributedString(markdown: release.notes, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
+                     ?? AttributedString(release.notes))
+                    .font(.system(size: 12))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 220)
+            Link("Open on GitHub", destination: release.page).font(.system(size: 12))
+        }
+        .frame(width: 320)
+        .padding(16)
+    }
+}
+
+/// What Maben Awake is doing right now, at the top of General.
+private struct StatusCard: View {
     @EnvironmentObject private var model: Model
 
     var body: some View {
-        HStack(spacing: 8) {
-            StateBadge(state: model.state, size: 18)
-            Text("\(model.headline) · \(model.statusText)")
-                .foregroundStyle(.secondary)
+        HStack(spacing: 14) {
+            StateBadge(state: model.state, size: 38)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(model.headline)
+                    .font(.system(size: 15, weight: .semibold))
+                    .foregroundStyle(MB.text)
+                Text(model.statusText)
+                    .font(.system(size: 12))
+                    .foregroundStyle(MB.muted)
+            }
+            Spacer()
+            if model.frozenCount > 0 {
+                HStack(spacing: 5) {
+                    FreezeGlyph(size: 11, lineWidth: 2.2)
+                    Text("\(model.frozenCount) frozen")
+                }
+                .font(.system(size: 12, weight: .medium))
+                .foregroundStyle(MB.cold)
+            }
         }
-        .font(.callout)
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(
+            RoundedRectangle(cornerRadius: MB.radius, style: .continuous)
+                .fill(LinearGradient(colors: [MB.green.opacity(model.isAsserting ? 0.14 : 0.04), MB.card],
+                                     startPoint: .topLeading, endPoint: .bottomTrailing))
+        )
+        .overlay(RoundedRectangle(cornerRadius: MB.radius, style: .continuous)
+            .strokeBorder(model.isAsserting ? MB.green.opacity(0.3) : MB.line))
     }
 }
 
 // MARK: - Apps
 
+/// Name and icon of an installed app by bundle ID, looked up on disk once.
+@MainActor
+enum InstalledApp {
+    private static var cache: [String: (name: String, icon: NSImage?)] = [:]
+    static func lookup(_ id: String) -> (name: String, icon: NSImage?) {
+        if let hit = cache[id] { return hit }
+        let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
+        let name = url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? id
+        let info = (name: name, icon: url.map { NSWorkspace.shared.icon(forFile: $0.path) })
+        cache[id] = info
+        return info
+    }
+}
+
 struct AppsPane: View {
     @EnvironmentObject private var model: Model
     @State private var search = ""
     @State private var confirmReset = false
+    @State private var showModes = false
 
-    private struct Row: Identifiable {
+    fileprivate struct Row: Identifiable {
         let bundleID: String
         let name: String
         let icon: NSImage?
@@ -109,10 +233,8 @@ struct AppsPane: View {
             rows.append(Row(bundleID: app.bundleID, name: app.name, icon: app.icon, running: true, frozen: app.isPaused))
         }
         for id in model.customizedBundleIDs where seen.insert(id).inserted {
-            let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: id)
-            let name = url.map { FileManager.default.displayName(atPath: $0.path).replacingOccurrences(of: ".app", with: "") } ?? id
-            let icon = url.map { NSWorkspace.shared.icon(forFile: $0.path) }
-            rows.append(Row(bundleID: id, name: name, icon: icon, running: false, frozen: false))
+            let info = InstalledApp.lookup(id)
+            rows.append(Row(bundleID: id, name: info.name, icon: info.icon, running: false, frozen: false))
         }
         let query = search.trimmingCharacters(in: .whitespaces)
         return rows
@@ -121,84 +243,35 @@ struct AppsPane: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
+        MBPage(title: "Apps", subtitle: SettingsPane.apps.subtitle) {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Choose what happens to each app while the lid is closed and Maben Awake keeps the Mac awake.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                HStack(spacing: 14) {
-                    ForEach(AppMode.allCases) { mode in
-                        Label(mode.label, systemImage: mode.symbol)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .help(mode.explanation.replacingOccurrences(of: "`", with: ""))
+                HStack(spacing: 8) {
+                    MBSearchField(placeholder: "Search apps", text: $search)
+                    Button { showModes.toggle() } label: { Label("Modes", systemImage: "info.circle") }
+                        .buttonStyle(.mbQuiet)
+                        .popover(isPresented: $showModes, arrowEdge: .bottom) { ModesHelp() }
+                    Button("Reset all") { confirmReset = true }
+                        .buttonStyle(.mbQuiet)
+                        .disabled(model.customizedBundleIDs.isEmpty)
+                }
+                MBSection {
+                    if rows.isEmpty {
+                        Text(search.isEmpty ? "No apps running" : "No apps match \u{201C}\(search)\u{201D}")
+                            .font(.system(size: 13))
+                            .foregroundStyle(MB.muted)
+                            .frame(maxWidth: .infinity)
+                            .padding(.vertical, 22)
                     }
-                    Spacer()
+                    ForEach(rows) { row in AppRow(row: row) }
                 }
-                SearchField(text: $search)
-            }
-            .padding([.horizontal, .top], 20)
-            .padding(.bottom, 12)
-
-            List {
-                ForEach(rows) { row in
-                    HStack(spacing: 10) {
-                        AppIcon(image: row.icon, size: 24)
-                            .opacity(row.running ? 1 : 0.55)
-                        VStack(alignment: .leading, spacing: 1) {
-                            HStack(spacing: 5) {
-                                Text(row.name).lineLimit(1)
-                                if row.frozen {
-                                    FreezeGlyph(size: 11, lineWidth: 2.2).foregroundStyle(.cyan)
-                                        .help("Frozen right now")
-                                }
-                            }
-                            Text(row.running ? row.bundleID : "Not running · \(row.bundleID)")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                                .lineLimit(1)
-                        }
-                        Spacer()
-                        if model.customizedBundleIDs.contains(row.bundleID) {
-                            Button {
-                                model.resetMode(row.bundleID)
-                            } label: {
-                                Image(systemName: "arrow.uturn.backward")
-                            }
-                            .buttonStyle(.borderless)
-                            .foregroundStyle(.secondary)
-                            .help("Back to the default mode")
-                        }
-                        ModeMenu(bundleID: row.bundleID)
-                            .frame(width: 112, alignment: .trailing)
-                    }
-                    .padding(.vertical, 3)
+                HStack(spacing: 6) {
+                    Image(systemName: "shield.lefthalf.filled")
+                    Text("Calls, music, passwords, VPNs, terminals and editors are Always on by default.")
                 }
-                if rows.isEmpty {
-                    Text(search.isEmpty ? "No apps" : "No apps match \"\(search)\"")
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .center)
-                        .padding(.vertical, 20)
-                }
+                .font(.system(size: 12))
+                .foregroundStyle(MB.dim)
             }
-            .listStyle(.inset(alternatesRowBackgrounds: true))
-            .frame(height: 300)
-            .overlay(alignment: .top) { Divider() }
-
-            HStack {
-                Label("Shielded apps (calls, audio, passwords, VPN, terminals and editors) are Always on by default.",
-                      systemImage: "shield.lefthalf.filled")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Spacer()
-                Button("Reset All…") { confirmReset = true }
-                    .disabled(model.customizedBundleIDs.isEmpty)
-            }
-            .padding(.horizontal, 20)
-            .padding(.vertical, 12)
         }
-        .frame(width: paneWidth)
         .confirmationDialog("Reset every app to its default mode?", isPresented: $confirmReset) {
             Button("Reset All", role: .destructive) { model.resetAllModes() }
         } message: {
@@ -207,23 +280,111 @@ struct AppsPane: View {
     }
 }
 
-private struct SearchField: View {
-    @Binding var text: String
-
+private struct ModesHelp: View {
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
-            TextField("Search apps", text: $text)
-                .textFieldStyle(.plain)
-            if !text.isEmpty {
-                Button { text = "" } label: { Image(systemName: "xmark.circle.fill") }
-                    .buttonStyle(.plain)
-                    .foregroundStyle(.secondary)
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(AppMode.allCases) { mode in
+                HStack(alignment: .top, spacing: 10) {
+                    Image(systemName: mode.symbol).font(.system(size: 12, weight: .semibold)).frame(width: 16).foregroundStyle(MB.text)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(mode.label).font(.system(size: 12.5, weight: .semibold)).foregroundStyle(MB.text)
+                        Text(mode.explanation.replacingOccurrences(of: "`", with: ""))
+                            .font(.system(size: 12)).foregroundStyle(MB.muted)
+                    }
+                }
             }
         }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 5)
-        .background(RoundedRectangle(cornerRadius: 7).fill(Color.primary.opacity(0.06)))
+        .frame(width: 270, alignment: .leading)
+        .padding(16)
+    }
+}
+
+private struct AppRow: View {
+    @EnvironmentObject private var model: Model
+    let row: AppsPane.Row
+    @State private var hovering = false
+
+    var body: some View {
+        let custom = model.customizedBundleIDs.contains(row.bundleID)
+        HStack(spacing: 12) {
+            AppIcon(image: row.icon, size: 26)
+                .opacity(row.running ? 1 : 0.45)
+                .saturation(row.frozen ? 0 : 1)
+            HStack(spacing: 6) {
+                Text(row.name)
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(row.frozen ? MB.muted : MB.text)
+                    .lineLimit(1)
+                if row.frozen {
+                    HStack(spacing: 4) {
+                        FreezeGlyph(size: 10, lineWidth: 2.3)
+                        Text("Frozen")
+                    }
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(MB.cold)
+                } else if !row.running {
+                    Text("Not running").font(.system(size: 11)).foregroundStyle(MB.dim)
+                }
+                if custom { Tag(text: "Custom") }
+            }
+            Spacer()
+            MBModeMenu(bundleID: row.bundleID, custom: custom)
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(hovering ? Color.white.opacity(0.025) : .clear)
+        .onHover { hovering = $0 }
+    }
+}
+
+private struct Tag: View {
+    let text: String
+    var body: some View {
+        Text(text)
+            .font(.system(size: 10, weight: .semibold))
+            .foregroundStyle(MB.muted)
+            .padding(.horizontal, 6)
+            .frame(height: 16)
+            .background(Capsule().fill(Color.white.opacity(0.07)))
+    }
+}
+
+/// The mode of one app: a Maben pill that opens the three modes and "Back to default".
+private struct MBModeMenu: View {
+    @EnvironmentObject private var model: Model
+    let bundleID: String
+    let custom: Bool
+
+    var body: some View {
+        let mode = model.mode(of: bundleID)
+        let protected = model.isProtectedByDefault(bundleID)
+        Menu {
+            ForEach(AppMode.allCases) { option in
+                Button { model.setMode(bundleID: bundleID, option) } label: {
+                    Label(option.label, systemImage: option == mode ? "checkmark" : option.symbol)
+                }
+            }
+            if custom {
+                Divider()
+                Button("Back to default (\(protected ? AppMode.always.label : AppMode.onDemand.label))") { model.resetMode(bundleID) }
+            }
+        } label: {
+            HStack(spacing: 5) {
+                Image(systemName: protected && mode == .always ? "shield.lefthalf.filled" : mode.symbol)
+                    .font(.system(size: 10.5, weight: .semibold))
+                Text(mode.shortLabel).font(.system(size: 12, weight: .medium))
+                Image(systemName: "chevron.up.chevron.down").font(.system(size: 8.5, weight: .bold)).foregroundStyle(MB.dim)
+            }
+            .foregroundStyle(MB.text)
+            .padding(.horizontal, 10)
+            .frame(height: 26)
+            .background(RoundedRectangle(cornerRadius: 7, style: .continuous).fill(Color.white.opacity(0.06)))
+            .overlay(RoundedRectangle(cornerRadius: 7, style: .continuous).strokeBorder(MB.line))
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize()
     }
 }
 
@@ -233,95 +394,68 @@ struct LidPane: View {
     @EnvironmentObject private var model: Model
 
     var body: some View {
-        Form {
-            Section {
+        MBPage(title: "Lid & Power", subtitle: SettingsPane.lid.subtitle) {
+            MBSection(title: "Lid closed",
+                      footer: model.lidSleepDisabled ? "Right now, closing the lid won't sleep the Mac."
+                                                     : "Right now, closing the lid sleeps the Mac.") {
                 if model.lidHelperInstalled {
-                    Toggle(isOn: $model.lidClosedMode) {
-                        Text("Stay awake with the lid closed")
-                        Text("Only while Maben Awake is keeping the Mac awake. Quitting always restores normal lid sleep.")
+                    MBRow(icon: "laptopcomputer", title: "Stay awake with the lid closed",
+                          info: "Only while Maben Awake is keeping the Mac awake. Quitting always restores normal lid sleep.") {
+                        MBToggle(isOn: $model.lidClosedMode)
                     }
-                    Picker(selection: $model.batteryCutoff) {
-                        ForEach([5, 10, 20, 30], id: \.self) { Text("Below \($0)%").tag($0) }
-                    } label: {
-                        Text("Allow lid sleep on battery")
-                        Text("So a closed laptop in a bag doesn't drain to zero.")
+                    MBRow(icon: "battery.25percent", title: "Sleep anyway below",
+                          detail: "So a laptop in a bag never drains to zero.") {
+                        MBSegmented(options: [5, 10, 20, 30], selection: $model.batteryCutoff) { "\($0)%" }
+                            .disabled(!model.lidClosedMode)
                     }
-                    .disabled(!model.lidClosedMode)
                 } else {
-                    LabeledContent {
-                        Button("Set Up…") { model.installLidHelper() }
-                    } label: {
-                        Text("Stay awake with the lid closed")
-                        Text("macOS ignores keep-awake requests when the lid closes. Setup asks for your password once and allows only `pmset disablesleep`.")
+                    MBRow(icon: "laptopcomputer", title: "Stay awake with the lid closed",
+                          detail: "Asks for your password once.",
+                          info: "macOS ignores keep-awake requests when the lid closes. Setup allows exactly one command without a password: pmset disablesleep.") {
+                        Button("Set up") { model.installLidHelper() }.buttonStyle(.mbPrimary)
                     }
                 }
-            } header: {
-                Text("Lid Closed")
-            } footer: {
-                HStack(alignment: .firstTextBaseline) {
-                    if model.lidSleepDisabled {
-                        Label("Right now, closing the lid won't sleep the Mac.", systemImage: "checkmark.seal.fill")
-                    } else {
-                        Label("Right now, closing the lid sleeps the Mac.", systemImage: "moon.zzz")
-                    }
-                    Spacer()
-                    Button("Show Log") { Integration.open(EventLog.url) }
-                        .buttonStyle(.link)
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
 
-            Section {
-                LabeledContent {
+            MBSection(title: "While the lid is closed",
+                      footer: "With an external display connected, nothing is frozen or dimmed. If the Mac gets seriously hot, it sleeps to cool down.") {
+                MBRow(icon: "maben.freeze", title: "Freeze apps no agent needs",
+                      detail: "Frozen apps use no CPU.") {
+                    MBToggle(isOn: $model.pauseOthers)
+                }
+                MBRow(icon: "sun.min.fill", title: "Turn the screen down to 0",
+                      detail: Brightness.isAvailable ? "Restored when the lid opens." : "Not available on this Mac.") {
+                    MBToggle(isOn: $model.dimWhenClosed).disabled(!Brightness.isAvailable)
+                }
+                MBRow(icon: "lock.open.fill", title: "Keep the screen unlocked",
+                      detail: "So an agent can still click in apps.",
+                      info: "Without it, macOS locks the screen after about half an hour and an agent can no longer click in apps.") {
+                    MBToggle(isOn: $model.keepUnlockedWhenClosed)
+                }
+            }
+
+            MBSection(title: "Safety") {
+                MBRow(icon: "checkmark.shield.fill", title: "Lid-open failsafe",
+                      detail: "Brings the screen back if the app gets stuck.",
+                      info: "A small separate service watches the lid. When you open it, it turns the screen back on and wakes apps, even if Maben Awake itself is stuck. Asks for your password once.") {
                     if model.failsafeInstalled {
-                        Label("On", systemImage: "checkmark.seal.fill").foregroundStyle(.secondary)
+                        MBStatus(kind: .ok, text: "On")
                     } else {
-                        Button(model.installingFailsafe ? "Installing…" : "Install…") { model.installFailsafe() }
+                        Button(model.installingFailsafe ? "Installing…" : "Install") { model.installFailsafe() }
+                            .buttonStyle(.mbPrimary)
                             .disabled(model.installingFailsafe || Failsafe.bundledBinary == nil)
                     }
-                } label: {
-                    Text("Lid-open failsafe")
-                    Text("A small background service that turns the screen back on and unfreezes apps when you open the lid, even if Maben Awake gets stuck. Asks for your password once.")
                 }
-            } header: {
-                Text("Safety")
-            }
-
-            Section {
-                Toggle(isOn: $model.pauseOthers) {
-                    Text("Freeze apps no AI needs")
-                    Text("Frozen apps use no CPU. Opening the lid thaws everything. Set modes per app in Apps.")
+                MBRow(icon: "list.bullet.rectangle", title: "Event log",
+                      detail: "Why the Mac stayed awake, or slept.") {
+                    Button("Open") { Integration.open(EventLog.url) }.buttonStyle(.mbQuiet)
                 }
-                Toggle(isOn: $model.dimWhenClosed) {
-                    Text("Turn screen brightness to 0")
-                    Text(Brightness.isAvailable
-                         ? "Restored when the lid opens."
-                         : "Brightness control isn't available on this Mac.")
-                }
-                .disabled(!Brightness.isAvailable)
-                Toggle(isOn: $model.keepUnlockedWhenClosed) {
-                    Text("Keep the screen unlocked")
-                    Text("Stops the display from idle-sleeping, which is what makes macOS lock the screen. Without it, an AI can't click in apps after about half an hour.")
-                }
-            } header: {
-                Text("While the Lid Is Closed")
-            } footer: {
-                Text("With an external display connected, nothing is frozen or dimmed. If the Mac gets seriously hot with the lid closed, Maben Awake lets it sleep to cool down.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .multilineTextAlignment(.leading)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
-        .formStyle(.grouped)
-        .frame(width: paneWidth)
-        .fixedSize(horizontal: false, vertical: true)
     }
 }
 
-// MARK: - AI
+// MARK: - Agents
 
 struct AIPane: View {
     @EnvironmentObject private var model: Model
@@ -332,6 +466,7 @@ struct AIPane: View {
     @State private var codexStatus = Integration.codexStatus
     @State private var problem: String?
     @State private var busy = false
+    @State private var justChanged: String?
 
     private var canInstall: Bool { Integration.isInApplications }
 
@@ -343,13 +478,19 @@ struct AIPane: View {
         codexStatus = Integration.codexStatus
     }
 
+    private func flash(_ id: String) {
+        withAnimation(.spring(response: 0.3, dampingFraction: 0.7)) { justChanged = id }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
+            withAnimation(.easeOut(duration: 0.3)) { if justChanged == id { justChanged = nil } }
+        }
+    }
+
     private func setCodex(install: Bool) {
         do {
             if install { try Integration.installCodexHooks() } else { try Integration.removeCodexHooks() }
             problem = nil
-        } catch {
-            problem = error.localizedDescription
-        }
+            flash("codex")
+        } catch { problem = error.localizedDescription }
         refresh()
     }
 
@@ -357,9 +498,8 @@ struct AIPane: View {
         do {
             if install { try Integration.installHooks() } else { try Integration.removeHooks() }
             problem = nil
-        } catch {
-            problem = error.localizedDescription
-        }
+            flash("claude")
+        } catch { problem = error.localizedDescription }
         refresh()
     }
 
@@ -368,188 +508,212 @@ struct AIPane: View {
         let done: @MainActor (Bool) -> Void = { ok in
             busy = false
             problem = ok ? nil : (install ? "The awake command wasn't added." : "The awake command wasn't removed.")
+            if ok { flash("cli") }
             refresh()
         }
         if install { Integration.installCLI(completion: done) } else { Integration.removeCLI(completion: done) }
     }
 
     var body: some View {
-        Form {
-            Section {
-                LabeledContent {
-                    StatusPill(status: hooksStatus)
-                    switch hooksStatus {
-                    case .missing: Button("Install") { setHooks(install: true) }.disabled(!canInstall)
-                    case .outdated: Button("Update") { setHooks(install: true) }.disabled(!canInstall)
-                    case .installed: Button("Remove") { setHooks(install: false) }
-                    }
-                } label: {
-                    Text("Claude Code hooks")
-                    Text(hooked.isEmpty
-                         ? "Keeps the Mac awake while Claude Code works (also inside T3 Code). Adds five entries to ~/.claude/settings.json."
-                         : hooked.map(Integration.tilde).joined(separator: ", "))
-                }
-                LabeledContent {
-                    StatusPill(status: codexStatus)
-                    switch codexStatus {
-                    case .missing: Button("Install") { setCodex(install: true) }.disabled(!canInstall)
-                    case .outdated: Button("Update") { setCodex(install: true) }.disabled(!canInstall)
-                    case .installed: Button("Remove") { setCodex(install: false) }
-                    }
-                } label: {
-                    Text("Codex hooks")
-                    Text(codexStatus == .installed
-                         ? "~/.codex/hooks.json. In Codex, run /hooks once and trust them."
-                         : Integration.codexPresent ? "Keeps the Mac awake while Codex works. Adds entries to ~/.codex/hooks.json."
-                                                    : "For OpenAI's Codex. Install it when you start using Codex.")
-                }
-                LabeledContent {
-                    StatusPill(status: cliStatus)
-                    switch cliStatus {
-                    case .missing: Button("Install") { setCLI(install: true) }.disabled(!canInstall || busy)
-                    case .outdated: Button("Update") { setCLI(install: true) }.disabled(!canInstall || busy)
-                    case .installed: Button("Remove") { setCLI(install: false) }.disabled(busy)
-                    }
-                } label: {
-                    Text("awake command")
-                    Text(cliPath ?? "For scripts and other AI tools: awake run, awake hold, awake need.")
-                }
-            } header: {
-                Text("Integration")
-            } footer: {
-                if let problem {
-                    Label(problem, systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else if !canInstall {
-                    Label("Move Maben Awake to your Applications folder and open it from there to install these.",
-                          systemImage: "exclamationmark.triangle.fill")
-                        .foregroundStyle(.orange)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                } else if hooksStatus == .outdated || cliStatus == .outdated {
-                    Text("Outdated means it points at another copy of the app. Update moves it to this one.")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+        MBPage(title: "Agents", subtitle: SettingsPane.ai.subtitle) {
+            if let problem {
+                Notice(text: problem)
+            } else if !canInstall {
+                Notice(text: "Move Maben Awake to your Applications folder and open it from there to connect your agents.")
             }
 
-            Section("Active Requests") {
+            MBSection(title: "Connections",
+                      footer: hooksStatus == .outdated || codexStatus == .outdated || cliStatus == .outdated
+                        ? "Outdated means it points at another copy of the app. Update moves it to this one." : nil) {
+                IntegrationRow(image: BrandLogo.claude, title: "Claude Code",
+                               detail: hooked.isEmpty ? "Keeps the Mac awake while Claude Code works."
+                                    : hooked.count == 1 ? "Connected in \(Integration.tilde(hooked[0]))" : "Connected in \(hooked.count) places",
+                               reveal: hooked.first, status: hooksStatus, enabled: canInstall,
+                               flashing: justChanged == "claude") { setHooks(install: $0) }
+                IntegrationRow(image: BrandLogo.openAI, title: "Codex",
+                               detail: codexStatus == .installed ? "Run /hooks in Codex once to trust them."
+                                    : "Keeps the Mac awake while Codex works.",
+                               reveal: codexStatus == .missing ? nil : Integration.codexHooksFile, status: codexStatus,
+                               enabled: canInstall, flashing: justChanged == "codex") { setCodex(install: $0) }
+                IntegrationRow(icon: "terminal.fill", title: "awake command",
+                               detail: cliPath ?? "For scripts and other tools.",
+                               reveal: nil, status: cliStatus, enabled: canInstall && !busy,
+                               flashing: justChanged == "cli") { setCLI(install: $0) }
+            }
+
+            MBSection(title: "Right now") {
                 if model.leases.isEmpty {
-                    Text("No AI is holding the Mac awake right now.")
-                        .foregroundStyle(.secondary)
+                    Text("No agent is keeping the Mac awake.")
+                        .font(.system(size: 13))
+                        .foregroundStyle(MB.muted)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(16)
                 } else {
                     TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        VStack(spacing: 8) {
+                        VStack(spacing: 0) {
                             ForEach(model.leases) { lease in
-                                HStack {
-                                    Label(lease.title, systemImage: lease.symbol)
-                                    Spacer()
-                                    Text(lease.detail).monospacedDigit().foregroundStyle(.secondary)
-                                    Button("Release") { model.release(lease) }
-                                        .controlSize(.small)
+                                MBRow(icon: lease.symbol, title: lease.title) {
+                                    Text(lease.detail)
+                                        .font(.system(size: 12).monospacedDigit())
+                                        .foregroundStyle(MB.muted)
+                                    Button("Release") { model.release(lease) }.buttonStyle(.mbQuiet)
                                 }
                             }
                         }
                     }
-                    Button("Release All") { model.releaseAllLeases() }
                 }
             }
 
-            Section {
-                CommandRow(command: "awake need Dia", detail: "Unfreeze an app for 10 minutes")
-                CommandRow(command: "awake run tests -- npm test", detail: "Stay awake while a command runs")
-                CommandRow(command: "awake hold build 30", detail: "Stay awake for 30 minutes")
-                CommandRow(command: "awake list", detail: "Show active requests")
-                CommandRow(command: "awake log", detail: "Why the Mac was kept awake, or slept")
-            } header: {
-                Text("Commands")
+            MBSection(title: "The awake command") {
+                MBCommandRow(command: "awake run tests -- npm test", detail: "Stay awake while a command runs")
+                MBCommandRow(command: "awake hold build 30", detail: "Stay awake for 30 minutes")
+                MBCommandRow(command: "awake need Dia", detail: "Wake a frozen app for 10 minutes")
+                MBCommandRow(command: "awake log", detail: "Why the Mac stayed awake, or slept")
             }
 
-            Section {
-                HStack {
-                    Button("Show Hook Log") { Integration.open(Integration.hooksLog) }
-                    Button("Show Event Log") { Integration.open(EventLog.url) }
-                    Spacer()
-                    Button("Open Requests Folder") { NSWorkspace.shared.open(LeaseStore.directory) }
+            HStack(spacing: 8) {
+                Button("Hook log") { Integration.open(Integration.hooksLog) }.buttonStyle(.mbQuiet)
+                Button("Event log") { Integration.open(EventLog.url) }.buttonStyle(.mbQuiet)
+                Button("Requests folder") { NSWorkspace.shared.open(LeaseStore.directory) }.buttonStyle(.mbQuiet)
+                Spacer()
+                if !model.leases.isEmpty {
+                    Button("Release all") { model.releaseAllLeases() }.buttonStyle(.mbDanger)
                 }
             }
         }
-        .formStyle(.grouped)
-        .frame(width: paneWidth)
-        .fixedSize(horizontal: false, vertical: true)
         .onAppear { refresh() }
     }
 }
 
-private struct StatusPill: View {
+/// A connection with its status, one action, and a short confirmation when it changes.
+private struct IntegrationRow: View {
+    var image: NSImage? = nil
+    var icon: String? = nil
+    let title: String
+    let detail: String
+    let reveal: URL?
     let status: Integration.Status
+    let enabled: Bool
+    let flashing: Bool
+    let action: (Bool) -> Void
+
     var body: some View {
-        Label(status == .installed ? "Installed" : status == .outdated ? "Outdated" : "Not installed",
-              systemImage: status == .installed ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-            .font(.callout)
-            .foregroundStyle(status == .installed ? .green : .orange)
+        MBRow(icon: icon, image: image, title: title, detail: detail) {
+            HStack(spacing: 10) {
+                if let reveal {
+                    Button { Integration.reveal(reveal) } label: { Image(systemName: "folder").font(.system(size: 11, weight: .semibold)) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(MB.dim)
+                        .help("Show in Finder")
+                }
+                if flashing {
+                    Image(systemName: "checkmark.circle.fill")
+                        .foregroundStyle(MB.green)
+                        .font(.system(size: 15))
+                        .transition(.scale.combined(with: .opacity))
+                } else {
+                    MBStatus(kind: status == .installed ? .ok : status == .outdated ? .warn : .off,
+                             text: status == .installed ? "Connected" : status == .outdated ? "Outdated" : "Off")
+                        .transition(.opacity)
+                }
+                switch status {
+                case .missing: Button("Connect") { action(true) }.buttonStyle(.mbPrimary).disabled(!enabled)
+                case .outdated: Button("Update") { action(true) }.buttonStyle(.mbPrimary).disabled(!enabled)
+                case .installed: Button("Remove") { action(false) }.buttonStyle(.mbQuiet)
+                }
+            }
+        }
     }
 }
 
-private struct CommandRow: View {
-    let command: String
-    let detail: String
-    @State private var copied = false
-
+private struct Notice: View {
+    let text: String
     var body: some View {
-        LabeledContent {
-            Button {
-                NSPasteboard.general.clearContents()
-                NSPasteboard.general.setString(command, forType: .string)
-                copied = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { copied = false }
-            } label: {
-                Image(systemName: copied ? "checkmark" : "doc.on.doc")
-                    .frame(width: 14)
-            }
-            .buttonStyle(.borderless)
-            .help("Copy")
-        } label: {
-            Text(command).font(.system(.body, design: .monospaced))
-            Text(detail)
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(MB.orange)
+            Text(text).font(.system(size: 12.5)).foregroundStyle(MB.text).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
         }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: MB.radius, style: .continuous).fill(MB.orange.opacity(0.1)))
+        .overlay(RoundedRectangle(cornerRadius: MB.radius, style: .continuous).strokeBorder(MB.orange.opacity(0.3)))
     }
 }
 
 // MARK: - About
 
 struct AboutPane: View {
-    private var version: String {
-        let info = Bundle.main.infoDictionary
-        let short = info?["CFBundleShortVersionString"] as? String ?? "dev"
-        let build = info?["CFBundleVersion"] as? String
-        return build.map { "Version \(short) (\($0))" } ?? "Version \(short)"
-    }
+    private var short: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
 
     var body: some View {
-        VStack(spacing: 10) {
-            Image(nsImage: NSImage(named: "AppIcon") ?? NSApp.applicationIconImage)
-                .resizable()
-                .frame(width: 88, height: 88)
-            Text("Maben Awake")
-                .font(.system(size: 20, weight: .semibold))
-            Text(version)
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-            Text("Keeps your Mac awake for the apps your AI needs,\nand freezes everything else.")
-                .multilineTextAlignment(.center)
-                .foregroundStyle(.secondary)
-                .padding(.top, 2)
-            HStack {
-                Button("Show Event Log") { Integration.open(EventLog.url) }
+        ScrollView {
+            VStack(spacing: 0) {
+                Image(nsImage: NSImage(named: "AppIcon") ?? NSApp.applicationIconImage)
+                    .resizable()
+                    .frame(width: 96, height: 96)
+                    .shadow(color: MB.green.opacity(0.25), radius: 24, y: 8)
+                MBWordmark(size: 22).padding(.top, 18)
+                HStack(spacing: 8) {
+                    Text("Version \(short)").textSelection(.enabled)
+                    Text("·")
+                    Button("Check for updates") { Updater.shared.check(userInitiated: true) }
+                        .buttonStyle(.plain)
+                        .foregroundStyle(MB.green)
+                }
+                .font(.system(size: 12))
+                .foregroundStyle(MB.dim)
+                .padding(.top, 8)
+
+                if !WhatsNew.items.isEmpty {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("New in this version").font(.system(size: 12, weight: .semibold)).foregroundStyle(MB.dim)
+                    ForEach(WhatsNew.items, id: \.self) { item in
+                        HStack(alignment: .top, spacing: 8) {
+                            Circle().fill(MB.green).frame(width: 5, height: 5).padding(.top, 6)
+                            Text(item).font(.system(size: 12.5)).foregroundStyle(MB.text).fixedSize(horizontal: false, vertical: true)
+                        }
+                    }
+                }
+                .padding(16)
+                .frame(width: 400, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: MB.radius, style: .continuous).fill(MB.card))
+                .overlay(RoundedRectangle(cornerRadius: MB.radius, style: .continuous).strokeBorder(MB.line))
+                .padding(.top, 24)
+                }
+
+                HStack(spacing: 8) {
+                    Link(destination: URL(string: "https://awake.maben.gg")!) { Text("Website") }.buttonStyle(.mbPrimary)
+                    Link(destination: URL(string: "https://awake.maben.gg/changelog/")!) { Text("Changelog") }.buttonStyle(.mbQuiet)
+                    Link(destination: URL(string: "https://github.com/maxbenschop/maben-awake")!) { Text("GitHub") }.buttonStyle(.mbQuiet)
+                }
+                .padding(.top, 20)
+                Text("© 2026 Maben · MIT licence")
+                    .font(.system(size: 11))
+                    .foregroundStyle(MB.dim)
+                    .padding(.top, 22)
             }
-            .padding(.top, 6)
-            Text(Bundle.main.infoDictionary?["NSHumanReadableCopyright"] as? String ?? "")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .padding(.top, 4)
+            .frame(maxWidth: .infinity)
+            .padding(.top, 44)
+            .padding(.bottom, 32)
         }
-        .padding(28)
-        .frame(width: paneWidth)
     }
+}
+
+/// This version's entry in CHANGELOG.md (bundled with the app), shown on About.
+enum WhatsNew {
+    static let items: [String] = {
+        guard let url = Bundle.main.url(forResource: "CHANGELOG", withExtension: "md"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return [] }
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? ""
+        var inSection = false, items: [String] = []
+        for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+            if line.hasPrefix("## ") {
+                if inSection { break }
+                inSection = line.dropFirst(3).hasPrefix(version + " ")
+            } else if inSection, line.hasPrefix("- ") {
+                items.append(String(line.dropFirst(2)).replacingOccurrences(of: "`", with: ""))
+            }
+        }
+        return items
+    }()
 }

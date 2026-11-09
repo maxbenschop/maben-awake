@@ -26,6 +26,8 @@ targets:
         buildPhase: resources
       - path: build/AppIcon.icns
         buildPhase: resources
+      - path: CHANGELOG.md
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: Maben Awake

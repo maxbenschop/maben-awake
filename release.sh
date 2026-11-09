@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Builds Maben Awake for the public download: universal (Apple silicon + Intel), hardened runtime, signed
 # with your Developer ID and notarized by Apple, so it opens with no "unidentified developer" warning.
-# Output: dist/Maben-Awake-<version>.dmg (drag to Applications) and .zip. Copy both to the website's download/ folder.
+# Output: dist/Maben-Awake.dmg (drag to Applications) and dist/Maben-Awake.zip (used by the updater). Then ./publish.sh.
 #
 # Everything goes through the Apple account signed in to Xcode (Settings → Apple Accounts): Xcode's
 # cloud-managed Developer ID certificate signs it and Xcode uploads it for notarization, so no certificate
@@ -64,14 +64,15 @@ done
 
 VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist")
 mkdir -p dist
-ZIP="dist/Maben-Awake-$VERSION.zip"
-rm -f "$ZIP"
+# Fixed names: the updater and the website's download buttons ask GitHub for releases/latest/download/<name>.
+ZIP="dist/Maben-Awake.zip"
+rm -f dist/Maben-Awake*.zip dist/Maben-Awake*.dmg
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
 # Disk image: the app beside a link to Applications, so installing is one drag. The app inside is the notarized,
 # stapled one, which is what Gatekeeper checks. The image itself isn't signed: the Developer ID certificate is
 # cloud-managed by Xcode and not available to codesign here.
-DMG="dist/Maben-Awake-$VERSION.dmg"
+DMG="dist/Maben-Awake.dmg"
 STAGE="$OUT/dmg"
 rm -rf "$STAGE" "$DMG"; mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/Maben Awake.app"
@@ -79,6 +80,5 @@ ln -s /Applications "$STAGE/Applications"
 hdiutil create -quiet -volname "Maben Awake" -srcfolder "$STAGE" -fs HFS+ -format ULFO -ov "$DMG"
 
 rm -rf MabenAwake.xcodeproj
-echo "Ready to share: $DMG and $ZIP (universal, app signed by Developer ID, notarized and stapled)"
-echo "Website: copy both to ../maben/awake-site/download/, update awake-site-src/release.json, then run"
-echo "  python3 ../maben/awake-site-src/build.py --hash"
+echo "Built Maben Awake $VERSION: $DMG and $ZIP (universal, signed by Developer ID, notarized and stapled)"
+echo "Publish it (GitHub release + website): ./publish.sh"

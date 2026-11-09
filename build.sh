@@ -47,7 +47,7 @@ else
     # (which pins the launchd agent to one code signature) when the version changes.
     /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $(date +%Y%m%d%H%M%S)" "$APP/Contents/Info.plist"
     cp build/AppIcon.icns "$APP/Contents/Resources/"
-    cp Resources/awake Resources/install-lid-helper.sh Resources/install-failsafe.sh "$APP/Contents/Resources/"
+    cp Resources/awake Resources/install-lid-helper.sh Resources/install-failsafe.sh CHANGELOG.md "$APP/Contents/Resources/"
     codesign --force --sign - "$APP" >/dev/null 2>&1 || true
     echo "Built $APP"
 fi
