@@ -1,10 +1,10 @@
 #!/bin/bash
-# Deep freeze/unfreeze test for Sleepwalker. Designed to run with the lid closed.
+# Deep freeze/unfreeze test for Maben Awake. Designed to run with the lid closed.
 # Logs every step with timestamps and writes a report to the Desktop.
 set -u
-REPORT="$HOME/Desktop/Sleepwalker-test-$(date +%H.%M).txt"
+REPORT="$HOME/Desktop/MabenAwake-test-$(date +%H.%M).txt"
 LOG=$(mktemp)
-LEASES="$HOME/Library/Application Support/Sleepwalker/leases"
+LEASES="$HOME/Library/Application Support/MabenAwake/leases"
 PASS=0; FAIL=0
 T0=$(date +%s)
 
@@ -38,9 +38,9 @@ wait_state() {
 }
 refocus() { osascript -e 'tell application "T3 Code (Beta)" to activate' >/dev/null 2>&1; }
 
-log "=== Sleepwalker deep test ==="
+log "=== Maben Awake deep test ==="
 log "lid=$(lid)  system-sleep=$(sleep_blocked)  SleepDisabled=$(sleep_disabled)  frontmost=$(front)"
-log "Sleepwalker running: $(pgrep -x Sleepwalker >/dev/null && echo yes || echo NO)"
+log "Maben Awake running: $(pgrep -x MabenAwake >/dev/null && echo yes || echo NO)"
 log "active leases: $(awake list | tr '\n' ';')"
 T3PID=$(pgrep -x "T3 Code (Beta)" | head -1)
 
@@ -155,7 +155,7 @@ ms=$(wait_state "$CALC" T 10) && pass "Calculator froze ${ms}ms after last reque
 log ""
 log "## 10. Power state throughout"
 log "  lid=$(lid)  system-sleep=$(sleep_blocked)  SleepDisabled=$(sleep_disabled)  uptime-continuity: test ran $(( $(date +%s) - T0 ))s without gaps"
-[ "$(sleep_blocked)" = "blocked" ] && pass "macOS reports sleep prevented by Sleepwalker" || fail "sleep not blocked"
+[ "$(sleep_blocked)" = "blocked" ] && pass "macOS reports sleep prevented by Maben Awake" || fail "sleep not blocked"
 [ "$(sleep_disabled)" = "1" ] && pass "closed-lid sleep disabled (SleepDisabled=1)" || fail "SleepDisabled=$(sleep_disabled)"
 
 # ---------------------------------------------------------------- cleanup
@@ -168,7 +168,7 @@ log "quit TextEdit and Calculator; Dia left running (frozen until needed)"
 
 # ---------------------------------------------------------------- report
 {
-    echo "Sleepwalker deep test — $(date '+%Y-%m-%d %H:%M')"
+    echo "Maben Awake deep test — $(date '+%Y-%m-%d %H:%M')"
     echo "Result: $PASS passed, $FAIL failed"
     echo
     echo "Info fetched through Dia while your lid was closed"

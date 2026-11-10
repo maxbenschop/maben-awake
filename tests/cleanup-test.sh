@@ -4,7 +4,7 @@
 # quit AI-launched apps (also when an old instance was quitting), leave pre-existing apps alone.
 set -u
 D=com.maxbenschop.sleepwalker
-L="$HOME/Library/Application Support/Sleepwalker/leases"
+L="$HOME/Library/Application Support/MabenAwake/leases"
 PASS=0; FAIL=0
 log()  { printf '%s  %s\n' "$(date '+%H:%M:%S')" "$*"; }
 pass() { PASS=$((PASS+1)); log "  ✅ $*"; }

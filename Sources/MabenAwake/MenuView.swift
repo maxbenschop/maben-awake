@@ -543,8 +543,7 @@ extension Lease {
         if name.hasSuffix("-cron") { return "Recurring task" }
         if name.hasSuffix("-bg") { return "Background task" }
         if name.hasSuffix("-monitor") { return "Watching a task" }
-        if name.hasPrefix("claude-") { return "Claude is working" }
-        if name.hasPrefix("codex-") { return "Codex is working" }
+        if let agent = Integration.agentName(ofLease: name) { return "\(agent) is working" }
         return name
     }
 
@@ -553,13 +552,13 @@ extension Lease {
         if name.hasSuffix("-wakeup") { return "alarm" }
         if name.hasSuffix("-cron") { return "repeat" }
         if name.hasSuffix("-bg") || name.hasSuffix("-monitor") { return "gearshape.2" }
-        if name.hasPrefix("claude-") || name.hasPrefix("codex-") { return "sparkles" }
+        if Integration.agentName(ofLease: name) != nil { return "sparkles" }
         return "cup.and.saucer.fill"
     }
 
     /// Turn holds show "now"; their expiry is only a safety cap. Others count down.
     var detail: String {
-        if isWork && (name.hasPrefix("claude-") || name.hasPrefix("codex-")) { return "now" }
+        if isWork && Integration.agentName(ofLease: name) != nil { return "now" }
         if name.hasSuffix("-wakeup") { return "in " + Self.format(remaining - 300) }
         return Self.format(remaining) + " left"
     }

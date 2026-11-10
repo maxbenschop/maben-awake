@@ -1,7 +1,7 @@
 import SwiftUI
 
 @main
-struct SleepwalkerApp: App {
+struct MabenAwakeApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @StateObject private var model: Model
     @ObservedObject private var updater = Updater.shared
@@ -12,6 +12,8 @@ struct SleepwalkerApp: App {
         Snapshot.verifyUpdateIfRequested()   // exits
         Snapshot.previewSettingsIfRequested()   // exits when the preview window closes
         #endif
+        Legacy.moveSettings()
+        Legacy.moveFiles()
         Instance.ensureSingle()   // may exit: another instance / the launchd agent takes over
         _model = StateObject(wrappedValue: Model.shared)
     }
@@ -31,6 +33,7 @@ struct SleepwalkerApp: App {
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
+            Integration.moveFromOldHookName()
             FirstRun.run()
             Updater.shared.start()
         }

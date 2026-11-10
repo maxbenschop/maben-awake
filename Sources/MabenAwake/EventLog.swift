@@ -2,12 +2,12 @@ import Foundation
 
 /// Append-only log of every keep-awake decision (why the Mac is kept awake,
 /// lid and power changes, sleep and wake, crash recovery, overheating…) in
-/// ~/Library/Logs/Sleepwalker.log, trimmed to the last
+/// ~/Library/Logs/MabenAwake.log, trimmed to the last
 /// 15000 lines (weeks of use) once it passes 3 MB.
 /// Read it with `awake log`.
 enum EventLog {
     static let url = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/Sleepwalker.log")
+        .appendingPathComponent("Library/Logs/MabenAwake.log")
 
     /// Local time, so the log lines up with when things happened at the Mac.
     private static let formatter: DateFormatter = {

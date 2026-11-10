@@ -1,7 +1,7 @@
 import AppKit
 import ServiceManagement
 
-/// Crash safety: Sleepwalker runs as a launchd agent with KeepAlive, so if it
+/// Crash safety: Maben Awake runs as a launchd agent with KeepAlive, so if it
 /// crashes or is force-killed, launchd restarts it within seconds and the new
 /// instance thaws every app the old one left frozen. Quitting from the menu
 /// exits cleanly (status 0), which launchd does not restart.
@@ -10,13 +10,38 @@ import ServiceManagement
 /// program path. `SMAppService.agent` with a bundle-relative path fails to
 /// spawn on macOS 26 ("Could not find and/or execute program").
 enum Instance {
-    static let agentLabel = "com.maxbenschop.sleepwalker.agent"
+    static let agentLabel = "gg.maben.awake.agent"
     private static let domain = "gui/\(getuid())"
     private static let plistURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/LaunchAgents/\(agentLabel).plist")
 
+    /// The app's own executable. Not `Bundle.main.executablePath`: started by the
+    /// launch agent of 1.4, that is the link with the old name.
+    private static var executable: String { Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/MabenAwake").path }
+
     static var launchedByLaunchd: Bool {
         ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == agentLabel
+    }
+
+    /// Started by the launch agent that 1.4 or earlier installed (after an update, or at login).
+    private static var launchedByLegacyAgent: Bool {
+        ProcessInfo.processInfo.environment["XPC_SERVICE_NAME"] == Legacy.agentLabel
+    }
+
+    /// Unloads and deletes the launch agent of 1.4 or earlier. Stops the copy it started, so never call it from that copy.
+    private static func removeLegacyAgent() {
+        let plist = plistURL.deletingLastPathComponent().appendingPathComponent(Legacy.agentLabel + ".plist")
+        guard FileManager.default.fileExists(atPath: plist.path) else { return }
+        launchctl(["bootout", "\(domain)/\(Legacy.agentLabel)"])
+        try? FileManager.default.removeItem(at: plist)
+        EventLog.write("removed the launch agent with the old name")
+    }
+
+    /// Running copies of the app, under this bundle ID or the other one it has had or will have.
+    private static func otherCopies() -> [NSRunningApplication] {
+        let ids = Set([Bundle.main.bundleIdentifier ?? Legacy.bundleID, Legacy.bundleID, Legacy.nextBundleID])
+        return ids.flatMap { NSRunningApplication.runningApplications(withBundleIdentifier: $0) }
+            .filter { $0.processIdentifier != getpid() }
     }
 
     /// Agent file present and loaded in launchd.
@@ -27,9 +52,14 @@ enum Instance {
     /// Makes sure exactly one instance runs, preferably the launchd-managed one.
     /// Call before anything else; may exit the process.
     static func ensureSingle() {
-        let me = getpid()
-        let others = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-            .filter { $0.processIdentifier != me }
+        if launchedByLegacyAgent {
+            // Hand over to an agent with the current name, which then removes the old one.
+            // Leaving with status 0 keeps launchd from starting this copy again.
+            if setEnabled(true) { exit(0) }
+            EventLog.write("could not replace the old launch agent; running under it")
+        }
+        if launchedByLaunchd { removeLegacyAgent() }
+        let others = otherCopies()
 
         if launchedByLaunchd {
             // A manually started copy is running: take over from it.
@@ -46,9 +76,7 @@ enum Instance {
             // but only once it is really up.
             let deadline = Date().addingTimeInterval(4)
             while Date() < deadline {
-                let started = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
-                    .contains { $0.processIdentifier != me }
-                if started { exit(0) }
+                if !otherCopies().isEmpty { exit(0) }
                 usleep(100_000)
             }
             EventLog.write("launch agent did not start; running without crash protection")
@@ -58,7 +86,8 @@ enum Instance {
     /// Start at login + restart after crashes.
     static func setEnabled(_ on: Bool) -> Bool {
         // Clean up registrations from older builds.
-        try? SMAppService.agent(plistName: agentLabel + ".plist").unregister()
+        try? SMAppService.agent(plistName: Legacy.agentLabel + ".plist").unregister()
+        if !launchedByLegacyAgent { removeLegacyAgent() }
         if SMAppService.mainApp.status == .enabled { try? SMAppService.mainApp.unregister() }
 
         launchctl(["bootout", "\(domain)/\(agentLabel)"])
@@ -68,8 +97,8 @@ enum Instance {
         }
         let plist: [String: Any] = [
             "Label": agentLabel,
-            "ProgramArguments": [Bundle.main.executablePath ?? "/Applications/Maben Awake.app/Contents/MacOS/Sleepwalker"],
-            "AssociatedBundleIdentifiers": [Bundle.main.bundleIdentifier ?? "com.maxbenschop.sleepwalker"],
+            "ProgramArguments": [executable],
+            "AssociatedBundleIdentifiers": [Bundle.main.bundleIdentifier ?? Legacy.bundleID],
             "RunAtLoad": true,
             "KeepAlive": ["SuccessfulExit": false],   // restart after crash, not after Quit
             "ThrottleInterval": 5,

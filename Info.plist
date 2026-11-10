@@ -9,13 +9,13 @@
     <key>CFBundleIdentifier</key>
     <string>com.maxbenschop.sleepwalker</string>
     <key>CFBundleExecutable</key>
-    <string>Sleepwalker</string>
+    <string>MabenAwake</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.4.1</string>
+    <string>1.5</string>
     <key>CFBundleVersion</key>
     <string>2</string>
     <key>LSMinimumSystemVersion</key>

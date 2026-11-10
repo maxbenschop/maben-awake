@@ -1,13 +1,13 @@
 import Foundation
 
-/// Sleepwalker's view of the lid, for the root failsafe daemon
-/// (Sources/SleepwalkerFailsafe). Written only when it changes, plus at start
+/// Maben Awake's view of the lid, for the root failsafe daemon
+/// (Sources/MabenAwakeFailsafe). Written only when it changes, plus at start
 /// and quit. When the lid opens and this file still says "lid closed" or
-/// "dimmed", the daemon knows Sleepwalker is stuck and brings the screen and
+/// "dimmed", the daemon knows Maben Awake is stuck and brings the screen and
 /// frozen apps back itself.
 enum Heartbeat {
     static let url = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Application Support/Sleepwalker/heartbeat.json")
+        .appendingPathComponent("Library/Application Support/MabenAwake/heartbeat.json")
 
     private struct State: Encodable, Equatable {
         var time: Double

@@ -2,12 +2,11 @@
 # Builds "Maben Awake.app" into ./build and optionally installs it.
 #   ./build.sh            -> build only
 #   ./build.sh install    -> build, copy to /Applications, install `awake` CLI,
-#                            add Claude Code hooks, launch (migrates Sleepwalker
-#                            and AwakeKeeper installs)
+#                            add Claude Code hooks, launch (migrates installs
+#                            under the old names Sleepwalker and AwakeKeeper)
 #
-# The app was called Sleepwalker before it became a Maben product. That name
-# stays as the internal codename: the bundle ID, executable, launchd labels,
-# settings and log paths are unchanged, so an existing install keeps its data.
+# The app was called Sleepwalker until 1.5. The app itself moves an older
+# install to the current names when it starts (Sources/MabenAwake/Legacy.swift).
 set -e
 cd "$(dirname "$0")"
 
@@ -20,9 +19,9 @@ if [ -n "$INSTALL_APP" ]; then
     echo "Installing $APP"
 else
     swift build -c release
-    BIN=$(swift build -c release --show-bin-path)/Sleepwalker
-    HOOK=$(swift build -c release --show-bin-path)/SleepwalkerHook
-    FAILSAFE=$(swift build -c release --show-bin-path)/SleepwalkerFailsafe
+    BIN=$(swift build -c release --show-bin-path)/MabenAwake
+    HOOK=$(swift build -c release --show-bin-path)/MabenAwakeHook
+    FAILSAFE=$(swift build -c release --show-bin-path)/MabenAwakeFailsafe
 
     # App icon: render once, then build the .icns from the 1024px PNG.
     if [ ! -f build/AppIcon.icns ] || [ Resources/make-icon.swift -nt build/AppIcon.icns ]; then
@@ -39,9 +38,13 @@ else
     INSTALLED="/Applications/Maben Awake.app"
     rm -rf "$APP" build/Sleepwalker.app
     mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-    cp "$BIN" "$APP/Contents/MacOS/Sleepwalker"
-    cp "$HOOK" "$APP/Contents/MacOS/sleepwalker-hook"
-    cp "$FAILSAFE" "$APP/Contents/MacOS/sleepwalker-failsafe"
+    cp "$BIN" "$APP/Contents/MacOS/MabenAwake"
+    cp "$HOOK" "$APP/Contents/MacOS/maben-awake-hook"
+    cp "$FAILSAFE" "$APP/Contents/MacOS/maben-awake-failsafe"
+    # The names 1.4 used, as links: its launch agent starts the app by the old
+    # name once after updating, and open agent sessions still call the old hook.
+    ln -s MabenAwake "$APP/Contents/MacOS/Sleepwalker"
+    ln -s maben-awake-hook "$APP/Contents/MacOS/sleepwalker-hook"
     cp Info.plist "$APP/Contents/Info.plist"
     # Unique build number per build: macOS only refreshes its background-item record
     # (which pins the launchd agent to one code signature) when the version changes.
@@ -58,7 +61,7 @@ fi
 for name in "Maben Awake" Sleepwalker AwakeKeeper; do
     osascript -e "quit app \"$name\"" >/dev/null 2>&1 || true
 done
-sleep 1; pkill -x Sleepwalker 2>/dev/null || true; pkill -x AwakeKeeper 2>/dev/null || true
+sleep 1; for p in MabenAwake Sleepwalker AwakeKeeper; do pkill -x "$p" 2>/dev/null || true; done
 
 # --- Migrate from AwakeKeeper -----------------------------------------
 if [ -d /Applications/AwakeKeeper.app ]; then
@@ -68,7 +71,7 @@ if [ -d /Applications/AwakeKeeper.app ]; then
         echo "Migrated AwakeKeeper settings"
     fi
     OLD="$HOME/Library/Application Support/AwakeKeeper"
-    NEW="$HOME/Library/Application Support/Sleepwalker"
+    NEW="$HOME/Library/Application Support/MabenAwake"
     [ -d "$OLD" ] && [ ! -d "$NEW" ] && mv "$OLD" "$NEW"
     rm -rf /Applications/AwakeKeeper.app
     echo "Removed /Applications/AwakeKeeper.app"
@@ -89,14 +92,14 @@ done
 
 # --- Claude Code hooks -------------------------------------------------
 # Hold a lease on every prompt / tool call, release when Claude stops.
-# Replaces hooks that point at the app under an older name (Sleepwalker.app,
-# AwakeKeeper.app). ~/.claude always gets the hooks; any other Claude Code
+# Replaces hooks that point at the app or the hook under an older name
+# (Sleepwalker.app, AwakeKeeper.app, sleepwalker-hook). ~/.claude always gets the hooks; any other Claude Code
 # config folder (~/.claude-*) that already had them is moved to the new path.
-python3 - "$INSTALLED/Contents/MacOS/sleepwalker-hook" <<'PY'
+python3 - "$INSTALLED/Contents/MacOS/maben-awake-hook" <<'PY'
 import glob, json, os, re, sys
 hook = sys.argv[1]
 cmd = {"type": "command", "command": f'"{hook}"'}
-old_hooks = ("AwakeKeeper.app", "Sleepwalker.app/")
+old_hooks = ("AwakeKeeper.app", "Sleepwalker.app/", "/sleepwalker-hook")
 events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"]
 main = os.path.expanduser("~/.claude/settings.json")
 paths = [main] + sorted(p for p in glob.glob(os.path.expanduser("~/.claude*/settings.json")) if p != main)
@@ -127,12 +130,12 @@ if os.path.isdir(codex_dir):
     for event in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Interrupt", "SessionEnd"]:
         lst = hooks.setdefault(event, [])
         for g in lst:
-            g["hooks"] = [h for h in g.get("hooks", []) if "sleepwalker-hook" not in h.get("command", "")]
+            g["hooks"] = [h for h in g.get("hooks", []) if "maben-awake-hook" not in h.get("command", "") and "sleepwalker-hook" not in h.get("command", "")]
         lst[:] = [g for g in lst if g.get("hooks")]
         lst.append({"hooks": [ccmd]})
     json.dump(s, open(path, "w"), indent=2)
     print("Codex hooks set in", path, "(run /hooks in Codex once to trust them)")
-# The product name in prose only: paths such as Library/Logs/Sleepwalker.log keep the codename.
+# The old names in prose.
 for md in glob.glob(os.path.expanduser("~/.claude*/CLAUDE.md")):
     t = open(md).read()
     new = re.sub(r"(?<![/\w.-])(AwakeKeeper|Sleepwalker)(?![\w/-]|\.\w)", "Maben Awake", t)
@@ -142,19 +145,25 @@ for md in glob.glob(os.path.expanduser("~/.claude*/CLAUDE.md")):
 PY
 
 # Start the crash-safe launchd copy if the agent exists; otherwise the app
-# installs the agent on first start. An agent that still points at the app
-# under its old name is pointed at the new one and reloaded first.
-AGENT="$HOME/Library/LaunchAgents/com.maxbenschop.sleepwalker.agent.plist"
+# installs the agent on first start. An agent with the old name is removed
+# first, so it can't start the app a second time.
+OLD_AGENT=com.maxbenschop.sleepwalker.agent
+if [ -f "$HOME/Library/LaunchAgents/$OLD_AGENT.plist" ]; then
+    launchctl bootout "gui/$(id -u)/$OLD_AGENT" 2>/dev/null || true
+    rm -f "$HOME/Library/LaunchAgents/$OLD_AGENT.plist"
+    echo "Removed the launch agent with the old name"
+fi
+AGENT="$HOME/Library/LaunchAgents/gg.maben.awake.agent.plist"
 DOMAIN="gui/$(id -u)"
-EXE="$INSTALLED/Contents/MacOS/Sleepwalker"
+EXE="$INSTALLED/Contents/MacOS/MabenAwake"
 if [ -f "$AGENT" ] && [ "$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$AGENT" 2>/dev/null)" != "$EXE" ]; then
-    launchctl bootout "$DOMAIN/com.maxbenschop.sleepwalker.agent" 2>/dev/null || true
+    launchctl bootout "$DOMAIN/gg.maben.awake.agent" 2>/dev/null || true
     /usr/libexec/PlistBuddy -c "Set :ProgramArguments:0 $EXE" "$AGENT"
     launchctl bootstrap "$DOMAIN" "$AGENT"      # RunAtLoad starts it
     echo "Pointed the launch agent at $INSTALLED"
 elif [ -f "$AGENT" ] && \
-   launchctl print "$DOMAIN/com.maxbenschop.sleepwalker.agent" 2>/dev/null | grep -q "LaunchAgents/com.maxbenschop"; then
-    launchctl kickstart -k "$DOMAIN/com.maxbenschop.sleepwalker.agent"
+   launchctl print "$DOMAIN/gg.maben.awake.agent" 2>/dev/null | grep -q "LaunchAgents/gg.maben"; then
+    launchctl kickstart -k "$DOMAIN/gg.maben.awake.agent"
 else
     open "$INSTALLED"
 fi

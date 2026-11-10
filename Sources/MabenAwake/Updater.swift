@@ -237,14 +237,21 @@ final class Updater: ObservableObject {
 
     struct Failure: Error { let message: String; init(_ m: String) { message = m } }
 
+    /// Bundle IDs an update may have: this copy's, and the one the app is moving to (see `Legacy`).
+    nonisolated static var acceptedIdentifiers: [String] {
+        var ids = [Bundle.main.bundleIdentifier ?? Legacy.bundleID, Legacy.bundleID, Legacy.nextBundleID]
+        ids = ids.enumerated().filter { ids.firstIndex(of: $0.element) == $0.offset }.map(\.element)
+        return ids
+    }
+
     /// The downloaded app must be ours, notarized, and the version we expect.
     nonisolated static func verify(_ app: URL, expectedVersion: String) throws {
         var code: SecStaticCode?
         guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code else {
             throw Failure("The update isn't a valid app.")
         }
-        let id = Bundle.main.bundleIdentifier ?? "com.maxbenschop.sleepwalker"
-        let text = "anchor apple generic and identifier \"\(id)\" and certificate leaf[subject.OU] = \"\(teamID)\""
+        let ids = acceptedIdentifiers.map { "identifier \"\($0)\"" }.joined(separator: " or ")
+        let text = "anchor apple generic and (\(ids)) and certificate leaf[subject.OU] = \"\(teamID)\""
         var requirement: SecRequirement?
         guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else {
             throw Failure("Couldn't check the update's signature.")

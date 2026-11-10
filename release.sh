@@ -66,7 +66,7 @@ VERSION=$(plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.pli
 mkdir -p dist
 # Fixed names: the updater and the website's download buttons ask GitHub for releases/latest/download/<name>.
 ZIP="dist/Maben-Awake.zip"
-rm -f dist/Maben-Awake*.zip dist/Maben-Awake*.dmg
+rm -f dist/Maben-Awake*.zip(N) dist/Maben-Awake*.dmg(N)   # (N): no error when there are none
 ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
 
 # Disk image: the app beside a link to Applications, so installing is one drag. The app inside is the notarized,

@@ -17,7 +17,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "When the Mac stays awake, and starting up."
         case .apps: "What happens to each app while the lid is closed."
         case .lid: "Keep working with the lid closed, safely."
-        case .ai: "Connect Claude Code, Codex and your scripts."
+        case .ai: "Connect Claude Code, Codex, Cursor and other agents."
         case .about: ""
         }
     }
@@ -36,7 +36,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .general: "keep awake manual login startup always on status"
         case .apps: "freeze frozen mode always while ai request reset shield"
         case .lid: "lid closed battery sleep failsafe brightness dim screen unlock lock heat"
-        case .ai: "agents claude code codex hooks awake command cli requests release log"
+        case .ai: "agents claude code codex cursor gemini copilot opencode qwen droid devin windsurf augment kiro hooks awake command cli requests release log"
         case .about: "version log update website github"
         }
     }
@@ -463,7 +463,7 @@ struct AIPane: View {
     @State private var cliStatus = Integration.cliStatus
     @State private var hooked = Integration.hookedSettingsFiles
     @State private var hooksStatus = Integration.hooksStatus
-    @State private var codexStatus = Integration.codexStatus
+    @State private var agents = Integration.presentAgents.map { ($0, Integration.status(of: $0)) }
     @State private var problem: String?
     @State private var busy = false
     @State private var justChanged: String?
@@ -475,7 +475,7 @@ struct AIPane: View {
         cliStatus = Integration.cliStatus
         hooked = Integration.hookedSettingsFiles
         hooksStatus = Integration.hooksStatus
-        codexStatus = Integration.codexStatus
+        agents = Integration.presentAgents.map { ($0, Integration.status(of: $0)) }
     }
 
     private func flash(_ id: String) {
@@ -485,13 +485,19 @@ struct AIPane: View {
         }
     }
 
-    private func setCodex(install: Bool) {
+    private func set(_ agent: Integration.Agent, install: Bool) {
         do {
-            if install { try Integration.installCodexHooks() } else { try Integration.removeCodexHooks() }
+            if install { try Integration.install(agent) } else { try Integration.remove(agent) }
             problem = nil
-            flash("codex")
+            flash(agent.id)
         } catch { problem = error.localizedDescription }
         refresh()
+    }
+
+    /// Agents that aren't set up on this Mac, for the note under the list.
+    private var otherAgents: String {
+        Integration.agents.filter { agent in !agents.contains { $0.0.id == agent.id } }
+            .map { $0.tested ? $0.name : $0.name + " (not tested yet)" }.joined(separator: ", ")
     }
 
     private func setHooks(install: Bool) {
@@ -523,18 +529,23 @@ struct AIPane: View {
             }
 
             MBSection(title: "Connections",
-                      footer: hooksStatus == .outdated || codexStatus == .outdated || cliStatus == .outdated
-                        ? "Outdated means it points at another copy of the app. Update moves it to this one." : nil) {
+                      footer: hooksStatus == .outdated || cliStatus == .outdated || agents.contains { $0.1 == .outdated }
+                        ? "Outdated means it points at another copy of the app. Update moves it to this one."
+                        : otherAgents.isEmpty ? nil : "Also works with \(otherAgents). They appear here once they're set up on this Mac.") {
                 IntegrationRow(image: BrandLogo.claude, title: "Claude Code",
                                detail: hooked.isEmpty ? "Keeps the Mac awake while Claude Code works."
                                     : hooked.count == 1 ? "Connected in \(Integration.tilde(hooked[0]))" : "Connected in \(hooked.count) places",
                                reveal: hooked.first, status: hooksStatus, enabled: canInstall,
                                flashing: justChanged == "claude") { setHooks(install: $0) }
-                IntegrationRow(image: BrandLogo.openAI, title: "Codex",
-                               detail: codexStatus == .installed ? "Run /hooks in Codex once to trust them."
-                                    : "Keeps the Mac awake while Codex works.",
-                               reveal: codexStatus == .missing ? nil : Integration.codexHooksFile, status: codexStatus,
-                               enabled: canInstall, flashing: justChanged == "codex") { setCodex(install: $0) }
+                ForEach(agents, id: \.0.id) { agent, status in
+                    IntegrationRow(image: agent.id == "codex" ? BrandLogo.openAI : nil, icon: agent.id == "codex" ? nil : "sparkles",
+                                   title: agent.name,
+                                   detail: (agent.tested ? "" : "Not tested yet. ")
+                                        + (status == .installed ? agent.afterConnecting ?? "Connected in \(Integration.tilde(Integration.file(of: agent)))"
+                                           : "Keeps the Mac awake while it works."),
+                                   reveal: status == .missing ? nil : Integration.file(of: agent), status: status,
+                                   enabled: canInstall, flashing: justChanged == agent.id) { set(agent, install: $0) }
+                }
                 IntegrationRow(icon: "terminal.fill", title: "awake command",
                                detail: cliPath ?? "For scripts and other tools.",
                                reveal: nil, status: cliStatus, enabled: canInstall && !busy,

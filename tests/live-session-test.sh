@@ -3,7 +3,7 @@
 # app. A watcher records every lease while it runs. Expected: the session's
 # "claude-…" lease and a need-Calculator lease appear during the turn, and both
 # are gone after the session ends. Costs a few cents of Haiku tokens.
-L="$HOME/Library/Application Support/Sleepwalker/leases"
+L="$HOME/Library/Application Support/MabenAwake/leases"
 LOG=$(mktemp)
 before=$(ls "$L" | sort)
 

@@ -9,24 +9,36 @@
 #   awake list                      show active holds
 #   awake log [lines]               why Maben Awake kept the Mac awake (or didn't), sleeps and wakes
 #   awake sleeplog [lines]          macOS's own record of real sleeps and wakes (pmset log)
-#   awake hook                      used by Claude Code hooks (reads hook JSON on stdin)
+#   awake hook                      used by agent hooks (reads hook JSON on stdin)
 #
-# Holds are files in ~/Library/Application Support/Sleepwalker/leases/<name>
+# Holds are files in ~/Library/Application Support/MabenAwake/leases/<name>
 # containing "<expiry-timestamp> <owner-pid> [app]". Maben Awake.app watches
 # that folder and drops a hold once it expires or its owner process exits.
 set -e
-DIR="${SLEEPWALKER_LEASES:-$HOME/Library/Application Support/Sleepwalker/leases}"
-LOG="${SLEEPWALKER_HOOK_LOG:-$HOME/Library/Logs/Sleepwalker-hooks.log}"
+DIR="${MABEN_AWAKE_LEASES:-$HOME/Library/Application Support/MabenAwake/leases}"
+LOG="${MABEN_AWAKE_HOOK_LOG:-$HOME/Library/Logs/MabenAwake-hooks.log}"
 mkdir -p "$DIR"
 
 safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 say() { [ -n "$AWAKE_QUIET" ] || echo "awake: $*"; }
 
-# The `claude` process we're running under (0 if none), so holds die with it.
+# The agent process we're running under (0 if none), so holds die with it.
+# Agents installed with npm run as `node <path>/<agent>`.
+is_agent() {
+    case "$1" in
+        *claude*|*codex*|*[Cc]ursor*|*gemini*|*copilot*|*opencode*|*qwen*|*droid*|*devin*|*auggie*|*kiro*) return 0 ;;
+    esac
+    return 1
+}
 owner() {
     p=$PPID
     while [ -n "$p" ] && [ "$p" -gt 1 ]; do
-        case "$(ps -o comm= -p "$p" 2>/dev/null)" in *claude*) echo "$p"; return ;; esac
+        c=$(ps -o comm= -p "$p" 2>/dev/null)
+        if is_agent "${c##*/}"; then echo "$p"; return; fi
+        case "${c##*/}" in node|bun|deno)
+            set -- $(ps -o args= -p "$p" 2>/dev/null)
+            if is_agent "$2"; then echo "$p"; return; fi ;;
+        esac
         p=$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')
     done
     echo 0
@@ -72,7 +84,7 @@ case "$1" in
             [ "$left" -ge 0 ] && echo "$(basename "$f")  ${left} min left${app:+  (app: $app)}"
         done; true ;;
     log)
-        EVENTS="$HOME/Library/Logs/Sleepwalker.log"
+        EVENTS="$HOME/Library/Logs/MabenAwake.log"
         [ -f "$EVENTS" ] || { echo "awake: no log yet ($EVENTS)" >&2; exit 1; }
         tail -n "${2:-60}" "$EVENTS" ;;
     sleeplog)
@@ -82,10 +94,11 @@ case "$1" in
             | grep -vE "Maintenance Sleep|Sleep Service Back to Sleep|Notification Wake Back to Sleep|Entering DarkWake" \
             | sed -E 's/ +\+[0-9]{4} /  /; s/	+/  /g; s/ {3,}/  /g' | cut -c1-160 | tail -n "${2:-30}" ;;
     hook)
-        # Claude Code hook. The compiled sleepwalker-hook is ~8x faster; this
+        # Claude Code hook. The compiled maben-awake-hook is ~8x faster; this
         # shell version is only the fallback.
-        FAST="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../MacOS/sleepwalker-hook"
-        [ -x "$FAST" ] && exec "$FAST"
+        FAST="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../MacOS/maben-awake-hook"
+        shift
+        [ -x "$FAST" ] && exec "$FAST" "$@"
         # Hook JSON arrives on stdin:
         # {"session_id":"...","hook_event_name":"...","tool_name":"...","tool_input":{...}}
         input=$(cat)
@@ -124,7 +137,7 @@ case "$1" in
                     printf '%s' "$input" \
                         | grep -oE '(tell (application|app) \\"[^\\]+\\"|open -a \\"[^\\]+\\"|open -a [A-Za-z0-9.]+)' \
                         | sed -E 's/^tell (application|app) \\"//; s/^open -a //; s/\\"//g; s/\\$//'
-                    # agent-desktop: `--app X` and `launch X` / `close-app X` (see sleepwalker-hook).
+                    # agent-desktop: `--app X` and `launch X` / `close-app X` (see maben-awake-hook).
                     case "$input" in *agent-desktop*)
                         val='(\\"[^"\\]+\\"|'"'"'[^'"'"']+'"'"'|[A-Za-z0-9.][A-Za-z0-9._-]*)'
                         printf '%s' "$input" \

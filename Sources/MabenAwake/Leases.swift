@@ -2,7 +2,7 @@ import Foundation
 
 /// A request from an external tool (Claude Code, a script…) to keep the Mac awake.
 ///
-/// Leases are plain files in `~/Library/Application Support/Sleepwalker/leases/`.
+/// Leases are plain files in `~/Library/Application Support/MabenAwake/leases/`.
 /// File name = lease name, content = "<expiry unix timestamp> [owner pid] [app]". The
 /// `awake` CLI writes them; the app just reads the directory. Leases that expired
 /// or whose owner process is gone are deleted.
@@ -24,7 +24,7 @@ struct Lease: Identifiable, Hashable {
 enum LeaseStore {
     static let directory: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let dir = base.appendingPathComponent("Sleepwalker/leases", isDirectory: true)
+        let dir = base.appendingPathComponent("MabenAwake/leases", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }()

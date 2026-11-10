@@ -25,6 +25,8 @@ jobs:
         run: swift build -c release
       - name: Installer tests
         run: ./tests/integration-test.sh
+      - name: Hook tests (every agent's events)
+        run: python3 tests/agent-hooks-test.py .build/debug/MabenAwakeHook
       - name: Scripts parse
         run: |
           zsh -n release.sh

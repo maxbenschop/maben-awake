@@ -6,11 +6,29 @@ A tiny macOS menu bar app: keep the Mac awake for the apps your AI agent needs
 Part of [Maben](https://maben.gg). Product colour: Awake green `#30D158` with a
 black mark. Website: `awake-site/` in the Maben folder (awake.maben.gg).
 
-The app was called Sleepwalker before it joined Maben, and that name stays as
-the internal codename: the bundle ID (`com.maxbenschop.sleepwalker`), the
-executable, the launchd labels and the settings, lease and log paths are
-unchanged, so an existing install keeps its data. `./build.sh install` replaces
-`/Applications/Sleepwalker.app` and moves the hooks and launch agent over.
+The app was called Sleepwalker until 1.5. Since then everything carries the
+Maben Awake name: the executable (`MabenAwake`), the hook (`maben-awake-hook`),
+the launchd labels (`gg.maben.awake.agent`, `gg.maben.awake.failsafe`) and the
+lease and log paths. An install of 1.4 or earlier is moved over when 1.5 first
+starts (`Sources/MabenAwake/Legacy.swift`, the only code that still knows the
+old name):
+
+- requests and logs move to the new paths, and the launch agent is replaced by
+  one with the new label;
+- every connected agent is pointed at the hook's new name;
+- the root failsafe and the sudoers rule are renamed the next time the
+  failsafe is installed, which Maben Awake offers once (it needs a password).
+
+Two links in the app, `Contents/MacOS/Sleepwalker` and `sleepwalker-hook`, keep
+the update itself working: the launch agent of 1.4 starts the app by its old
+name one last time, and agent sessions that were open during the update still
+call the old hook. They can go once nobody runs 1.4 any more.
+
+The bundle ID is still `com.maxbenschop.sleepwalker`. 1.4 only installs an
+update signed with its own ID, so changing it now would cut those copies off
+from updates. 1.5 accepts `gg.maben.awake` as well and copies the settings
+over, so a later release can switch by changing the ID in `Info.plist` and
+`project.yml`.
 
 <p>
   <img src="docs/screenshots/menu-busy-light.png" width="300" alt="Menu">
@@ -27,7 +45,7 @@ Needs Xcode command line tools (`xcode-select --install`). macOS 13+.
 
 ## Updates
 
-The app updates itself from GitHub Releases (`Sources/Sleepwalker/Updater.swift`):
+The app updates itself from GitHub Releases (`Sources/MabenAwake/Updater.swift`):
 
 1. At start, every 6 hours, and after waking (if it has been 6 hours) it asks the GitHub API for the latest release (never drafts or pre-releases).
 2. If its tag `vX.Y.Z` is newer, the menu bar icon turns green and the menu and Settings › General show an
@@ -55,9 +73,9 @@ For a new version: bump `CFBundleShortVersionString` in `Info.plist`, add a `## 
 `CHANGELOG.md`, merge to `main`, run `./release.sh`, then `./publish.sh`. That tags the commit, creates the GitHub
 release (notes from `CHANGELOG.md`), and rebuilds and deploys awake.maben.gg (version, checksums, changelog page).
 
-A downloaded copy sets itself up: on first start from Applications it opens Settings → Agents, where the Claude
-Code hooks and the `awake` command are installed, updated or removed with a button (`Integration.swift`,
-tested by `tests/integration-test.sh` against a temporary home folder). Opened straight from Downloads it asks
+A downloaded copy sets itself up: on first start from Applications it opens Settings → Agents, where the hooks
+of Claude Code and the other agents and the `awake` command are installed, updated or removed with a button
+(`Integration.swift`, tested by `tests/integration-test.sh` against a temporary home folder). Opened straight from Downloads it asks
 to be moved to Applications first (`FirstRun.swift`).
 
 ## How it works
@@ -95,25 +113,67 @@ with live countdowns, and every running app with its mode.
 | General | manual keep-awake, "only while an Always on app runs", open at login |
 | Apps | modes for running *and* remembered apps, search, reset per app or all |
 | Lid & Power | lid-closed mode (or its one-time setup), battery cutoff, freezing, dimming, keeping the screen unlocked |
-| AI | install, update or remove the Claude Code hooks and the `awake` CLI; active requests, copyable commands, logs |
+| Agents | connect, update or remove Claude Code, the other agents set up on this Mac, and the `awake` CLI; active requests, copyable commands, logs |
 | About | version |
 
-## Codex
+## Other agents
 
-Codex uses the same hook program with `--agent codex`, from `~/.codex/hooks.json`
-(Settings → Agents → Codex hooks, or `./build.sh install` when `~/.codex` exists).
-Codex asks you to review new hooks once: run `/hooks` in Codex and trust them.
-Its requests show as *Codex is working* in the menu.
+Every agent uses the same hook program, called with `--agent <id>` (and
+`--event <name>`, since not every agent says in its JSON which event it is).
+Settings → Agents lists the agents set up on this Mac (their config folder
+exists) with a Connect button each. Their requests show as *Cursor is
+working*, *Gemini CLI is working* and so on in the menu.
+
+| Agent | Where the hooks go | Notes |
+|---|---|---|
+| Codex | `~/.codex/hooks.json` | run `/hooks` in Codex once to trust them; also set by `./build.sh install` |
+| Cursor (editor and CLI) | `~/.cursor/hooks.json` | not tested yet. No `preToolUse`: Cursor blocks a tool call whose hook answers anything but a valid decision, so the hold is 2 hours from the prompt on, and apps a command names are woken once it has finished |
+| Gemini CLI | `~/.gemini/settings.json` | end of turn is `AfterAgent` |
+| GitHub Copilot (CLI and VS Code) | `~/.copilot/hooks/maben-awake.json` | our own file; needs Copilot CLI 1.0.6 or later |
+| OpenCode | `~/.config/opencode/plugins/maben-awake.js` | a plugin, since OpenCode has no hooks; it passes each event to the hook |
+| Qwen Code | `~/.qwen/settings.json` | |
+| Droid | `~/.factory/hooks.json`, or `settings.json` when that already has hooks | not tested yet. Droid ignores the hooks in its settings once `hooks.json` exists |
+| Devin (was Windsurf) | `~/.config/devin/config.json` | not tested yet |
+| Augment | `~/.augment/settings.json` | not tested yet |
+| Kiro | `~/.kiro/hooks/maben-awake.json` | not tested yet. Our own file; Kiro CLI 3 or later |
+
+Files shared with the agent keep everything else in them, and get one backup
+(`<file>.before-maben-awake`) the first time. A settings file that isn't plain
+JSON (comments) is left alone and reported. Cursor and Devin also run the
+hooks in Claude Code's settings; the hook recognises them, so connecting both
+doesn't count a session twice.
+
+`tests/agent-hooks-test.py` feeds the hook what each agent sends, as its
+documentation describes it. Claude Code, Codex (0.156), GitHub Copilot CLI
+(1.0.108), OpenCode (1.19.5), Gemini CLI (0.67) and Qwen Code were also run for
+real: a prompt, a shell command and the end of the turn each reached the hook
+and left the right requests. Cursor, Droid, Devin, Augment and Kiro need an
+account and are built from their documentation only (`tested: false` in
+`Integration.agents`); Settings shows them as "Not tested yet", and none of
+their hooks can block or approve anything, so the worst case is that the Mac
+isn't kept awake.
+
+Codex ties its approval of a hook to the command. The hook's path changed in
+1.5, so Codex asks to review the hooks again: run `/hooks` once.
+
+Not connected: Amp, Pi and Cline (plugins that have to answer for every tool
+call), Goose and Crush, and Aider and Zed (no hooks at all). They can still
+use the `awake` command, for example `awake run aider -- aider`.
+
+To add an agent: one entry in `Integration.agents`, its event and tool names
+in `Sources/MabenAwakeHook/main.swift` if they are new, a name in `is_agent`
+in `Resources/awake`, and its payloads in `tests/agent-hooks-test.py`.
 
 ## Let AI ask for it (`awake` CLI)
 
 `./build.sh install` links an `awake` command and adds Claude Code hooks to
 `~/.claude/settings.json`, so **Claude Code and T3 Code keep the Mac awake
-automatically while they work and let it sleep again when they stop**:
+automatically while they work and let it sleep again when they stop** (the
+other agents do the same through their own events, see above):
 
 | Hook | What it does |
 |---|---|
-| `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | hold a lease named `claude-<session>`: 15 minutes, or 2 hours while a tool runs (refreshed on every prompt and tool call) |
+| `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | hold a lease named `<agent>-<session>` (`claude-3f2a…`): 15 minutes, or 2 hours while a tool runs (refreshed on every prompt and tool call) |
 | `Stop`, `SessionEnd` | release the lease |
 
 Leases show up in the menu as *AI requests* with a countdown and an ✕ to
@@ -128,29 +188,29 @@ awake log                      # why the Mac was kept awake (or wasn't), sleeps 
 awake sleeplog                 # macOS's own record of real sleeps and wakes
 ```
 
-Leases are just files in `~/Library/Application Support/Sleepwalker/leases/`,
+Leases are just files in `~/Library/Application Support/MabenAwake/leases/`,
 so a lease can never outlive its expiry even if the tool crashes.
 
 ## Safety
 
-- **Crash safety** – runs as a launchd agent (`~/Library/LaunchAgents/com.maxbenschop.sleepwalker.agent.plist`,
+- **Crash safety** – runs as a launchd agent (`~/Library/LaunchAgents/gg.maben.awake.agent.plist`,
   KeepAlive on crash). If it crashes or is force-killed, launchd restarts it
   within seconds and the new instance thaws every frozen app and restores
   the sleep and brightness settings. Quit from the menu stays quit.
 - **Lid-open failsafe** – a small root launch daemon
-  (`/Library/LaunchDaemons/com.maxbenschop.sleepwalker.failsafe.plist`) makes
+  (`/Library/LaunchDaemons/gg.maben.awake.failsafe.plist`) makes
   sure opening the lid always brings the Mac back, even if Maben Awake itself
   is stuck. Maben Awake writes its view of the lid to
-  `~/Library/Application Support/Sleepwalker/heartbeat.json` whenever it
+  `~/Library/Application Support/MabenAwake/heartbeat.json` whenever it
   changes. If the lid opens and Maben Awake hasn't reported "lid open, screen
   restored" within 6 seconds, the daemon unfreezes every stopped process of
   the logged-in user and turns the brightness back up; if Maben Awake still
   hasn't reported in after 16 seconds, it restarts it. Being root, nothing in
   your login session can freeze it. Installed with the lid-closed setup, or
   later from Settings → Lid & Power → Safety (Maben Awake offers it once when
-  it's missing or outdated). Log: `/Library/Logs/Sleepwalker-failsafe.log`
+  it's missing or outdated). Log: `/Library/Logs/MabenAwake-failsafe.log`
   (recoveries also appear in `awake log`). Check it with
-  `/Library/PrivilegedHelperTools/com.maxbenschop.sleepwalker.failsafe status`;
+  `/Library/PrivilegedHelperTools/gg.maben.awake.failsafe status`;
   remove with `sudo Resources/install-failsafe.sh --uninstall`.
 - **Only real processes are signalled** – every freeze/thaw goes through
   `Signals.send`, which refuses pid ≤ 1 and Maben Awake itself. (`kill(-1, …)`
@@ -160,13 +220,13 @@ so a lease can never outlive its expiry even if the tool crashes.
   In clamshell mode (lid closed, external monitor) nothing is frozen or dimmed.
 - **Heat check** – if macOS reports a *serious* or *critical* thermal state
   while you're away, Maben Awake stops keeping the Mac awake so it sleeps and
-  cools down (logged in `~/Library/Logs/Sleepwalker.log`). Cleared when you
+  cools down (logged in `~/Library/Logs/MabenAwake.log`). Cleared when you
   open the lid.
 - **Other sleep tools** – apps like Vorssaint or Amphetamine also toggle
   `pmset disablesleep`. Maben Awake reads the real value every 3 seconds, not
   just what it last set, and blocks closed-lid sleep again if another app turned
   it back on (logged as "re-enabled by another app").
-- **Event log** – `~/Library/Logs/Sleepwalker.log` (or `awake log`) records
+- **Event log** – `~/Library/Logs/MabenAwake.log` (or `awake log`) records
   every decision: when and why the Mac is kept awake (which Always on app,
   which AI requests), lid and power changes, whether closed-lid sleep is
   blocked and why not, and a snapshot of the state at every sleep and wake.
@@ -182,7 +242,7 @@ so a lease can never outlive its expiry even if the tool crashes.
 | Mode | Behaviour |
 |---|---|
 | **Always on** | never frozen |
-| **While AI works** | awake while any Claude turn (or `awake run`) is active |
+| **While AI works** | awake while any agent's turn (or `awake run`) is active |
 | **When AI asks** (default) | frozen until an AI requests it with `awake need <app>`; frozen again when that AI's turn ends |
 
 Apps running from outside `/Applications` (an Xcode or `swift build`
@@ -198,16 +258,16 @@ Chrome, Arc, Brave, Edge, Vivaldi) only the tabs the AI opened are closed.
 If the lid was opened while the AI used the app, nothing is closed, since
 you may have opened those tabs yourself.
 
-The Claude Code hooks call `Maben Awake.app/Contents/MacOS/sleepwalker-hook`,
+The hooks call `Maben Awake.app/Contents/MacOS/maben-awake-hook`,
 a small compiled program (~8 ms per call; the old shell hook took ~50–60 ms).
-`awake hook` forwards to it. It prints nothing, so it costs Claude no tokens.
+`awake hook` forwards to it. It prints nothing, so it costs the agent no tokens.
 
 Hooks request apps automatically for browser tools (→ default browser),
 `docker`/`kubectl` commands, `osascript 'tell application "X"'`,
 `open -a X` and [agent-desktop](https://github.com/vercel-labs/agent-desktop)
 (`--app X`, `launch X`, `close-app X`). Frozen apps are frozen together with their helper processes
 (browser tabs, Electron helpers). Hook activity is logged to
-`~/Library/Logs/Sleepwalker-hooks.log`.
+`~/Library/Logs/MabenAwake-hooks.log`.
 
 ## Testing
 
@@ -217,13 +277,13 @@ requesters, closed-lid power state) and writes a report to the Desktop. `tests/l
 lid close/open cycle, `tests/cleanup-test.sh` the tab/app cleanup (run it while no other AI
 session is using the browser, or its tab checks are correctly skipped),
 `tests/hook-equivalence-test.py` compares the compiled hook with the shell
-version, `tests/failsafe-test.sh` runs the failsafe daemon's lid-open logic with
+version, `tests/agent-hooks-test.py` checks the hook against every agent's events, `tests/failsafe-test.sh` runs the failsafe daemon's lid-open logic with
 a fake lid and a dry run (safe while Maben Awake runs), and `tests/live-session-test.sh` runs a real headless Claude session.
 Dia note: reading page content via AppleScript JavaScript needs Dia launched
 with `--enable-applescript-javascript`; the test reads the tab title/URL from
 Dia and fetches the text over HTTP instead.
 
-UI snapshots: `swift build && .build/debug/Sleepwalker --snapshot /tmp/snaps`
+UI snapshots: `swift build && .build/debug/MabenAwake --snapshot /tmp/snaps`
 renders the menu and every Settings tab (light and dark) to PNGs with canned
 data. It never starts the real app, so it's safe while Maben Awake is running.
 
