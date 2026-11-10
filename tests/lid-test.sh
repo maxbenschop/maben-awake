@@ -1,9 +1,9 @@
 #!/bin/bash
 # Clean lid test. Run with: bash /tmp/aktest/lidtest2.sh
 set -u
-REPORT="$HOME/Desktop/Sleepwalker-lidtest-$(date +%H.%M).txt"; LOG=$(mktemp)
+REPORT="$HOME/Desktop/MabenAwake-lidtest-$(date +%H.%M).txt"; LOG=$(mktemp)
 PASS=0; FAIL=0; D=com.maxbenschop.sleepwalker
-L="$HOME/Library/Application Support/Sleepwalker/leases"
+L="$HOME/Library/Application Support/MabenAwake/leases"
 log()  { printf '%s  %s\n' "$(date '+%H:%M:%S')" "$*" | tee -a "$LOG"; }
 pass() { PASS=$((PASS+1)); log "  ✅ $*"; }
 fail() { FAIL=$((FAIL+1)); log "  ❌ $*"; log "     leases: $(ls "$L" | tr '\n' ' ')"; }
@@ -30,7 +30,7 @@ log ""; log "## A. Lid closed"
 [ "$(bright)" = "0.00" ] && pass "screen brightness is 0" || fail "brightness is $(bright)"
 SAVED=$(defaults read $D savedBrightness 2>/dev/null); [ -n "$SAVED" ] && pass "previous brightness saved ($SAVED)" || fail "no saved brightness"
 pmset -g | grep -q 'SleepDisabled.*1' && pass "closed-lid sleep disabled" || fail "SleepDisabled != 1"
-pmset -g | grep -E '^ *sleep ' | grep -q Sleepwalker && pass "system sleep prevented by Sleepwalker" || fail "sleep not prevented"
+pmset -g | grep -E '^ *sleep ' | grep -q Maben Awake && pass "system sleep prevented by Maben Awake" || fail "sleep not prevented"
 tmo 8 curl -s -o /dev/null -w '%{http_code}' https://www.apple.com | grep -q 200 && pass "network up with lid closed" || fail "network down"
 T3=$(ps -axo pid=,comm= | awk '/MacOS\/T3 Code \(Beta\)$/ {print $1; exit}')
 [ -n "$T3" ] && [ "$(st "$T3")" != "T" ] && pass "T3 Code awake (Always on), pid $T3" || fail "T3 Code frozen or not found (pid='$T3')"
@@ -73,5 +73,5 @@ else
     fail "lid not opened within 25 min"
 fi
 osascript -e "quit app \"$B2\"" >/dev/null 2>&1
-{ echo "Sleepwalker lid test — $PASS passed, $FAIL failed"; echo; cat "$LOG"; } > "$REPORT"
+{ echo "Maben Awake lid test — $PASS passed, $FAIL failed"; echo; cat "$LOG"; } > "$REPORT"
 log "=== DONE: $PASS passed, $FAIL failed — $REPORT ==="

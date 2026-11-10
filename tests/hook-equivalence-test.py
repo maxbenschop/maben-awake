@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Runs every hook scenario through the old shell hook (`awake hook`) and the
-compiled one (sleepwalker-hook) in scratch lease folders and compares the
-leases they leave behind. Usage: hook-equivalence-test.py <awake> <sleepwalker-hook>"""
+compiled one (maben-awake-hook) in scratch lease folders and compares the
+leases they leave behind. Usage: hook-equivalence-test.py <awake> <maben-awake-hook>"""
 import json, os, subprocess, sys, tempfile, time
 
 SHELL, BINARY = sys.argv[1], sys.argv[2]
@@ -42,7 +42,7 @@ SCENARIOS = [
 ]
 
 def run(hook, events, folder):
-    env = {**os.environ, "SLEEPWALKER_LEASES": folder, "SLEEPWALKER_HOOK_LOG": folder + "/../hook.log"}
+    env = {**os.environ, "MABEN_AWAKE_LEASES": folder, "MABEN_AWAKE_HOOK_LOG": folder + "/../hook.log"}
     total = 0.0
     for e in events:
         payload = e if isinstance(e, str) else json.dumps(e)

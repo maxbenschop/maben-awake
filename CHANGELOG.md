@@ -3,6 +3,14 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
+## 1.5 · 10 November 2026
+
+- Works with nine more agents: Cursor, Gemini CLI, GitHub Copilot (in the terminal and in VS Code), OpenCode, Qwen Code, Droid, Devin, Augment and Kiro. Settings shows the ones set up on your Mac, each with a Connect button.
+- The menu names the agent that is working, such as Cursor is working.
+- An app woken with `awake need` inside any of these agents freezes again when that agent's turn ends, as with Claude Code.
+- Two Codex sessions started within a minute of each other no longer share one request.
+- The app no longer uses its old name, Sleepwalker, for its files. Requests, logs, hooks and the launch agent move to Maben Awake names by themselves; the lid-open failsafe asks for your password once to do the same.
+
 ## 1.4.1 · 10 November 2026
 
 - Checks for updates when the Mac wakes, if the last check was more than 6 hours ago, so a Mac that sleeps most of the day still updates promptly.

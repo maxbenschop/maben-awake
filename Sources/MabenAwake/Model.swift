@@ -3,7 +3,7 @@ import Combine
 import IOKit.pwr_mgt
 import ServiceManagement
 
-/// How Sleepwalker treats an app while it's keeping the Mac awake.
+/// How Maben Awake treats an app while it's keeping the Mac awake.
 enum AppMode: String, CaseIterable, Identifiable {
     case always, whileAI, onDemand
     var id: String { rawValue }
@@ -267,7 +267,7 @@ final class Model: ObservableObject {
     /// A model with canned state for rendering the UI; has no side effects.
     init(preview apps: [AppEntry], leases: [Lease], asserting: Bool, away: Bool = false,
          modes: [String: AppMode] = [:], lidHelper: Bool = true, recovered: Bool = false, overheated: Bool = false) {
-        defaults = UserDefaults(suiteName: "com.maxbenschop.sleepwalker.preview")!
+        defaults = UserDefaults(suiteName: "gg.maben.awake.preview")!
         isPreview = true
         keepAwake = true
         onlyWhileCheckedRunning = false
@@ -698,7 +698,7 @@ final class Model: ObservableObject {
     }
 
     /// SIGCONT every regular app (and its helpers) that is stopped but not in
-    /// our own paused set, e.g. left over from a previous Sleepwalker instance.
+    /// our own paused set, e.g. left over from a previous Maben Awake instance.
     private func thawStrays() {
         for app in runningApps() {
             let pid = app.processIdentifier

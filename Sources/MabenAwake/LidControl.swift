@@ -7,8 +7,9 @@ import IOKit.ps
 /// `pmset disablesleep 1` (root) stops that. A one-time sudoers rule installed by
 /// `install-lid-helper.sh` lets us run exactly that command without a password.
 enum LidControl {
-    /// Current rule file, plus the one installed under the app's old name.
-    static let sudoersFiles = ["/etc/sudoers.d/sleepwalker", "/etc/sudoers.d/awakekeeper"]
+    /// Current rule file, plus the ones installed under the app's old names
+    /// (`install-failsafe.sh` renames those the next time it runs).
+    static let sudoersFiles = ["/etc/sudoers.d/maben-awake", "/etc/sudoers.d/sleepwalker", "/etc/sudoers.d/awakekeeper"]
 
     static var isHelperInstalled: Bool { sudoersFiles.contains { FileManager.default.fileExists(atPath: $0) } }
 

@@ -1,17 +1,17 @@
 import Foundation
 
-/// The lid-open failsafe: a root launch daemon (Sources/SleepwalkerFailsafe)
+/// The lid-open failsafe: a root launch daemon (Sources/MabenAwakeFailsafe)
 /// that unfreezes apps and turns the screen back on when the lid opens, even if
-/// Sleepwalker itself is stuck. Installed with one password prompt by
+/// Maben Awake itself is stuck. Installed with one password prompt by
 /// `install-failsafe.sh`, which copies the binary to a root-owned location.
 enum Failsafe {
-    static let label = "com.maxbenschop.sleepwalker.failsafe"
+    static let label = "gg.maben.awake.failsafe"
     static let installedBinary = "/Library/PrivilegedHelperTools/\(label)"
     static let daemonPlist = "/Library/LaunchDaemons/\(label).plist"
 
-    /// The copy shipped inside Sleepwalker.app.
+    /// The copy shipped inside the app.
     static var bundledBinary: String? {
-        let path = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/sleepwalker-failsafe").path
+        let path = Bundle.main.bundleURL.appendingPathComponent("Contents/MacOS/maben-awake-failsafe").path
         return FileManager.default.isExecutableFile(atPath: path) ? path : nil
     }
 
@@ -49,7 +49,7 @@ enum Failsafe {
     }
 
     /// Asks for the admin password and installs the daemon. Runs `osascript` as
-    /// a separate process so the password dialog never blocks Sleepwalker's
+    /// a separate process so the password dialog never blocks Maben Awake's
     /// main thread (which has to keep watching the lid).
     static func install(completion: @escaping @Sendable (Bool) -> Void) {
         guard let cmd = installCommand else { completion(false); return }

@@ -4,33 +4,33 @@ import Foundation
 import IOKit
 import SystemConfiguration
 
-// Sleepwalker failsafe.
+// Maben Awake failsafe.
 //
-// A tiny root daemon (/Library/LaunchDaemons/com.maxbenschop.sleepwalker.failsafe.plist)
+// A tiny root daemon (/Library/LaunchDaemons/gg.maben.awake.failsafe.plist)
 // that makes sure opening the lid always brings the Mac back, even when
-// Sleepwalker itself is stuck. With the lid closed Sleepwalker turns the screen
+// Maben Awake itself is stuck. With the lid closed Maben Awake turns the screen
 // brightness to 0 and freezes apps; it undoes both when it sees the lid open.
-// If Sleepwalker hangs, the screen stays black and apps stay frozen. Running as
+// If Maben Awake hangs, the screen stays black and apps stay frozen. Running as
 // root, this daemon can't be frozen by anything in the user session.
 //
-// Sleepwalker writes its view of the lid to a heartbeat file whenever it
-// changes. When the lid opens, this daemon waits for Sleepwalker to report
+// Maben Awake writes its view of the lid to a heartbeat file whenever it
+// changes. When the lid opens, this daemon waits for Maben Awake to report
 // "lid open, screen restored". If that doesn't happen:
 //   after  6 s: unfreeze every stopped process of the console user and turn the
 //               screen brightness back up;
-//   after 16 s: if Sleepwalker still hasn't reported in, restart it.
+//   after 16 s: if Maben Awake still hasn't reported in, restart it.
 //
 // Usage:
-//   sleepwalker-failsafe daemon                    run the watchdog (as root, from launchd)
-//   sleepwalker-failsafe status                    print what the watchdog would see
-//   sleepwalker-failsafe restore-brightness [0-1]  set brightness if it is ~0 (as the user)
-//   sleepwalker-failsafe brightness                print the built-in display brightness
-//   sleepwalker-failsafe --version
+//   maben-awake-failsafe daemon                    run the watchdog (as root, from launchd)
+//   maben-awake-failsafe status                    print what the watchdog would see
+//   maben-awake-failsafe restore-brightness [0-1]  set brightness if it is ~0 (as the user)
+//   maben-awake-failsafe brightness                print the built-in display brightness
+//   maben-awake-failsafe --version
 
-/// Bump when the daemon's behaviour changes; Sleepwalker offers to update an
+/// Bump when the daemon's behaviour changes; Maben Awake offers to update an
 /// installed failsafe whose version differs from the bundled one.
-let version = "1"
-let agentLabel = "com.maxbenschop.sleepwalker.agent"
+let version = "2"
+let agentLabel = "gg.maben.awake.agent"
 let checkAfter: TimeInterval = 6
 let restartAfter: TimeInterval = 16
 let fallbackBrightness: Float = 0.5
@@ -39,14 +39,14 @@ let fallbackBrightness: Float = 0.5
 /// these set): fake lid state from a file, a heartbeat path, faster timings,
 /// and a dry run that logs recovery actions instead of performing them.
 let env = ProcessInfo.processInfo.environment
-let testLidFile = env["SLEEPWALKER_FAILSAFE_TEST_LID"]
-let testHeartbeat = env["SLEEPWALKER_FAILSAFE_TEST_HEARTBEAT"]
-let dryRun = env["SLEEPWALKER_FAILSAFE_DRY_RUN"] == "1"
-let timeScale = env["SLEEPWALKER_FAILSAFE_TEST_FAST"] == "1" ? 0.25 : 1.0
+let testLidFile = env["MABEN_AWAKE_FAILSAFE_TEST_LID"]
+let testHeartbeat = env["MABEN_AWAKE_FAILSAFE_TEST_HEARTBEAT"]
+let dryRun = env["MABEN_AWAKE_FAILSAFE_DRY_RUN"] == "1"
+let timeScale = env["MABEN_AWAKE_FAILSAFE_TEST_FAST"] == "1" ? 0.25 : 1.0
 
 // MARK: - Logging
 
-let ownLog = "/Library/Logs/Sleepwalker-failsafe.log"
+let ownLog = "/Library/Logs/MabenAwake-failsafe.log"
 
 let stampFormatter: DateFormatter = {
     let f = DateFormatter()
@@ -56,13 +56,13 @@ let stampFormatter: DateFormatter = {
 }()
 
 /// Appends to our own log and, when it is a plain file owned by the console
-/// user, to Sleepwalker's event log so `awake log` shows what happened.
+/// user, to Maben Awake's event log so `awake log` shows what happened.
 func log(_ message: String, user: ConsoleUser? = nil) {
     let line = "\(stampFormatter.string(from: Date())) \(message)\n"
     if getuid() != 0 { FileHandle.standardError.write(Data(line.utf8)); return }
     appendSafely(line, to: ownLog, owner: 0, create: true)
     if let user { appendSafely("\(stampFormatter.string(from: Date())) failsafe: \(message)\n",
-                               to: user.home + "/Library/Logs/Sleepwalker.log", owner: user.uid, create: false) }
+                               to: user.home + "/Library/Logs/MabenAwake.log", owner: user.uid, create: false) }
 }
 
 /// Root writing into a user's directory: refuse symlinks, hard links and files
@@ -103,7 +103,7 @@ func isLidClosed() -> Bool {
         .takeRetainedValue() as? Bool) ?? false
 }
 
-/// What Sleepwalker last wrote (see Heartbeat.swift in the app).
+/// What Maben Awake last wrote (see Heartbeat.swift in the app).
 struct Heartbeat: Decodable {
     var time: Double
     var pid: Int32?
@@ -114,7 +114,7 @@ struct Heartbeat: Decodable {
 }
 
 func heartbeatPath(_ user: ConsoleUser) -> String {
-    testHeartbeat ?? user.home + "/Library/Application Support/Sleepwalker/heartbeat.json"
+    testHeartbeat ?? user.home + "/Library/Application Support/MabenAwake/heartbeat.json"
 }
 
 /// Reads at most 64 KB from a regular file, without following symlinks or
@@ -133,24 +133,24 @@ func readHeartbeat(_ user: ConsoleUser) -> Heartbeat? {
 
 enum Health {
     case fine(String)
-    /// `stale`: Sleepwalker never reported the lid open (likely hung).
+    /// `stale`: Maben Awake never reported the lid open (likely hung).
     case broken(String, stale: Bool, savedBrightness: Float?)
 }
 
-/// Has Sleepwalker undone its lid-closed state?
+/// Has Maben Awake undone its lid-closed state?
 func health(_ user: ConsoleUser) -> Health {
-    guard let hb = readHeartbeat(user) else { return .fine("no heartbeat, Sleepwalker not in use") }
-    if hb.quit == true && !hb.dimmed { return .fine("Sleepwalker quit cleanly") }
+    guard let hb = readHeartbeat(user) else { return .fine("no heartbeat, Maben Awake not in use") }
+    if hb.quit == true && !hb.dimmed { return .fine("Maben Awake quit cleanly") }
     if hb.lidClosed {
         let age = Int(Date().timeIntervalSince1970 - hb.time)
-        return .broken("Sleepwalker hasn't noticed the lid opening (last report \(age)s ago)",
+        return .broken("Maben Awake hasn't noticed the lid opening (last report \(age)s ago)",
                        stale: true, savedBrightness: hb.savedBrightness)
     }
     if hb.dimmed {
-        return .broken("Sleepwalker saw the lid open but the screen is still dimmed",
+        return .broken("Maben Awake saw the lid open but the screen is still dimmed",
                        stale: false, savedBrightness: hb.savedBrightness)
     }
-    return .fine("Sleepwalker restored everything")
+    return .fine("Maben Awake restored everything")
 }
 
 // MARK: - Recovery
@@ -196,13 +196,13 @@ func restoreBrightness(_ user: ConsoleUser, to saved: Float?) -> Int32 {
     return run("/bin/launchctl", args)
 }
 
-func restartSleepwalker(_ user: ConsoleUser) {
-    if dryRun { log("dry run: would restart Sleepwalker"); return }
+func restartApp(_ user: ConsoleUser) {
+    if dryRun { log("dry run: would restart Maben Awake"); return }
     let target = "gui/\(user.uid)/\(agentLabel)"
     run("/bin/launchctl", ["kill", "SIGKILL", target])
     sleep(1)
     let rc = run("/bin/launchctl", ["kickstart", target])
-    log(rc == 0 ? "restarted Sleepwalker" : "could not restart Sleepwalker (launchctl \(rc)); is its launch agent loaded?",
+    log(rc == 0 ? "restarted Maben Awake" : "could not restart Maben Awake (launchctl \(rc)); is its launch agent loaded?",
         user: user)
 }
 
@@ -271,11 +271,11 @@ func runDaemon() -> Never {
                 }
             } else if stage == 1 && elapsed >= restartAfter * timeScale {
                 if case .broken(let why, true, _) = health(user) {
-                    log("still stuck after \(Int(elapsed))s (\(why)), restarting Sleepwalker", user: user)
+                    log("still stuck after \(Int(elapsed))s (\(why)), restarting Maben Awake", user: user)
                     _ = thawStopped(uid: user.uid)
-                    restartSleepwalker(user)
+                    restartApp(user)
                 } else {
-                    log("Sleepwalker recovered after being unfrozen", user: user)
+                    log("Maben Awake recovered after being unfrozen", user: user)
                 }
                 openedAt = nil
             }
@@ -319,6 +319,6 @@ case "status":
     case .broken(let why, let stale, _): print("if the lid opened now: would recover (\(why)\(stale ? ", may restart" : ""))")
     }
 default:
-    FileHandle.standardError.write(Data("usage: sleepwalker-failsafe daemon | status | restore-brightness [0-1] | brightness | --version\n".utf8))
+    FileHandle.standardError.write(Data("usage: maben-awake-failsafe daemon | status | restore-brightness [0-1] | brightness | --version\n".utf8))
     exit(64)
 }

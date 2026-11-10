@@ -2,21 +2,21 @@
 import PackageDescription
 
 let package = Package(
-    name: "Sleepwalker",
+    name: "MabenAwake",
     platforms: [.macOS(.v13)],
     targets: [
         .executableTarget(
-            name: "Sleepwalker",
-            path: "Sources/Sleepwalker",
+            name: "MabenAwake",
+            path: "Sources/MabenAwake",
             linkerSettings: [.linkedFramework("IOKit")]
         ),
         .executableTarget(
-            name: "SleepwalkerHook",
-            path: "Sources/SleepwalkerHook"
+            name: "MabenAwakeHook",
+            path: "Sources/MabenAwakeHook"
         ),
         .executableTarget(
-            name: "SleepwalkerFailsafe",
-            path: "Sources/SleepwalkerFailsafe",
+            name: "MabenAwakeFailsafe",
+            path: "Sources/MabenAwakeFailsafe",
             linkerSettings: [.linkedFramework("IOKit"), .linkedFramework("SystemConfiguration")]
         ),
     ]

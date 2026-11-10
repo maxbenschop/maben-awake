@@ -17,7 +17,7 @@ targets:
     type: application
     platform: macOS
     sources:
-      - path: Sources/Sleepwalker
+      - path: Sources/MabenAwake
       - path: Resources/awake
         buildPhase: resources
       - path: Resources/install-lid-helper.sh
@@ -31,11 +31,20 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Maben Awake
-        EXECUTABLE_NAME: Sleepwalker        # the codename stays the process name
-        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker
+        EXECUTABLE_NAME: MabenAwake
+        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker   # changes to gg.maben.awake in a later release, see Legacy.swift
         INFOPLIST_FILE: build/Info-release.plist
         GENERATE_INFOPLIST_FILE: "NO"
         CODE_SIGN_ENTITLEMENTS: Release.entitlements
+    postBuildScripts:
+      # The names 1.4 used, as links: its launch agent starts the app by the old name once
+      # after updating, and open agent sessions still call the old hook (see Legacy.swift).
+      - name: Links with the old names
+        basedOnDependencyAnalysis: false
+        script: |
+          cd "$BUILT_PRODUCTS_DIR/$EXECUTABLE_FOLDER_PATH"
+          ln -sf MabenAwake Sleepwalker
+          ln -sf maben-awake-hook sleepwalker-hook
     dependencies:
       - sdk: IOKit.framework
       - target: Hook
@@ -51,20 +60,20 @@ targets:
   Hook:
     type: tool
     platform: macOS
-    sources: [Sources/SleepwalkerHook]
+    sources: [Sources/MabenAwakeHook]
     settings:
       base:
-        PRODUCT_NAME: sleepwalker-hook
-        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker.hook
+        PRODUCT_NAME: maben-awake-hook
+        PRODUCT_BUNDLE_IDENTIFIER: gg.maben.awake.hook
         SKIP_INSTALL: "YES"
   Failsafe:
     type: tool
     platform: macOS
-    sources: [Sources/SleepwalkerFailsafe]
+    sources: [Sources/MabenAwakeFailsafe]
     settings:
       base:
-        PRODUCT_NAME: sleepwalker-failsafe
-        PRODUCT_BUNDLE_IDENTIFIER: com.maxbenschop.sleepwalker.failsafe
+        PRODUCT_NAME: maben-awake-failsafe
+        PRODUCT_BUNDLE_IDENTIFIER: gg.maben.awake.failsafe
         SKIP_INSTALL: "YES"
     dependencies:
       - sdk: IOKit.framework

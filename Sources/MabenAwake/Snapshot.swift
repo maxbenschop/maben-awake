@@ -2,12 +2,12 @@
 import AppKit
 import SwiftUI
 
-/// `Sleepwalker --snapshot <dir>` (debug builds only) renders the menu and
+/// `MabenAwake --snapshot <dir>` (debug builds only) renders the menu and
 /// every Settings pane to PNGs with canned data, without touching apps,
-/// power settings or a running Sleepwalker.
+/// power settings or a running Maben Awake.
 @MainActor
 enum Snapshot {
-    /// `Sleepwalker --preview-settings` (debug builds): opens only the Settings
+    /// `MabenAwake --preview-settings` (debug builds): opens only the Settings
     /// window with canned data, to try it out next to the installed app. Nothing
     /// is frozen and no real settings are changed.
     static func previewSettingsIfRequested() {
@@ -43,7 +43,7 @@ enum Snapshot {
         exit(0)
     }
 
-    /// `Sleepwalker --verify-update <app> <version>` (debug): runs the updater's checks on an app and prints the result.
+    /// `MabenAwake --verify-update <app> <version>` (debug): runs the updater's checks on an app and prints the result.
     static func verifyUpdateIfRequested() {
         let args = CommandLine.arguments
         guard let i = args.firstIndex(of: "--verify-update"), i + 2 < args.count else { return }
