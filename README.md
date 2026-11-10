@@ -31,8 +31,8 @@ over, so a later release can switch by changing the ID in `Info.plist` and
 `project.yml`.
 
 <p>
-  <img src="docs/screenshots/menu-busy-light.png" width="300" alt="Menu">
-  <img src="docs/screenshots/menu-busy-dark.png" width="300" alt="Menu in dark mode">
+  <img src="docs/screenshots/menu.png" width="300" alt="The menu while Claude is working: three AI requests and eight apps, two of them frozen">
+  <img src="docs/screenshots/settings-agents.png" width="520" alt="Settings, Agents: Claude Code and Codex connected, Cursor, Gemini CLI and GitHub Copilot ready to connect">
 </p>
 
 ## Build & install
@@ -285,7 +285,10 @@ Dia and fetches the text over HTTP instead.
 
 UI snapshots: `swift build && .build/debug/MabenAwake --snapshot /tmp/snaps`
 renders the menu and every Settings tab (light and dark) to PNGs with canned
-data. It never starts the real app, so it's safe while Maben Awake is running.
+data and a demo set of connected agents (a scratch home folder, so nothing of
+this Mac's setup shows up). It never starts the real app, so it's safe while
+Maben Awake is running. The pictures in `docs/screenshots/` come from it; run
+`./build.sh` once first so the About page has the app icon.
 
 ## Notes
 

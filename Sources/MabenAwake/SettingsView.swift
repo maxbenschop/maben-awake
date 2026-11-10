@@ -547,7 +547,7 @@ struct AIPane: View {
                                    enabled: canInstall, flashing: justChanged == agent.id) { set(agent, install: $0) }
                 }
                 IntegrationRow(icon: "terminal.fill", title: "awake command",
-                               detail: cliPath ?? "For scripts and other tools.",
+                               detail: cliPath.map { Integration.tilde(URL(fileURLWithPath: $0)) } ?? "For scripts and other tools.",
                                reveal: nil, status: cliStatus, enabled: canInstall && !busy,
                                flashing: justChanged == "cli") { setCLI(install: $0) }
             }
@@ -654,7 +654,7 @@ private struct Notice: View {
 // MARK: - About
 
 struct AboutPane: View {
-    private var short: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev" }
+    private var short: String { Updater.shared.currentVersion }
 
     var body: some View {
         ScrollView {
