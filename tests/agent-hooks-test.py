@@ -147,7 +147,13 @@ with tempfile.TemporaryDirectory() as d:
     check("any kind of task still running counts", leases(d) == {LEASE + "-bg": 480}, f"{leases(d)}")
 for command, detached in [("npm run dev > /tmp/dev.log 2>&1 &", True), ("nohup ./server &", True), ("python3 -m http.server 8000 & disown", True),
                           ("npm test 2>&1 | tail -5", False), ("./a & ./b & wait", False), ("make && make test", False),
-                          ("./server & sleep 2; curl -s localhost:8000; kill %1", False)]:
+                          ("./server & sleep 2; curl -s localhost:8000; kill %1", False),
+                          ("(swift test > /tmp/t.log 2>&1; echo DONE >> /tmp/t.log) &", True),
+                          ("npm run dev > /tmp/dev.log 2>&1 & sleep 3; curl -s localhost:3000", True),
+                          ("curl -s 'https://api.example.com/v1?a=1&b=2' | head", False),
+                          ("osascript -e 'set out to out & (URL of t) & \" | \"'", False),
+                          ("git commit -m 'Run nohup in the docs & more'", False),
+                          ("python3 - <<'EOF'\nprint('nohup' + ' & ')\nEOF", False)]:
     with tempfile.TemporaryDirectory() as d:
         claude("PreToolUse", d, **bash(command))
         got = leases(d).get(LEASE + "-detached")
@@ -163,9 +169,18 @@ with tempfile.TemporaryDirectory() as scratch:
         ("JavaScript for Automation", "osascript -l JavaScript -e 'Application(\"Notes\").notes.length'", {"com.apple.Notes"}, live),
         ("quit app", "osascript -e 'quit app \"Dia\"'", {"company.thebrowser.dia"}, live),
         ("pkill a frozen app", "pkill -x Chain; sleep 1; pgrep -x Chain", {"net.maben.chain"}, live),
-        ("bundle ID anywhere", "defaults read com.apple.Notes", {"com.apple.Notes"}, live),
+        ("bundle ID after open -b", "open -b com.apple.Notes", {"com.apple.Notes"}, live),
+        ("bundle ID elsewhere is not a request", "defaults read com.apple.Notes", set(), live),
         ("its .app", "open build/Debug/Chain.app", {"net.maben.chain"}, live),
-        ("in quotes in a script", "python3 tools/windows.py --name \"Dia\"", {"company.thebrowser.dia"}, live),
+        ("pkill -f with the app's path", "pkill -f \"Chain.app/Contents/MacOS/Chain\"", {"net.maben.chain"}, live),
+        ("pkill -f with a pattern names no app", "pkill -f 'next start -p 3100'; pkill -f \"/Chain$\"", set(), live),
+        ("pgrep only looks", "pgrep -lx Chain; open https://example.com", {"browser"}, live),
+        ("a defaults domain next to a kill is not a request", "pkill -f fake-relay.mjs; defaults delete net.maben.chain", set(), live),
+        ("lsappinfo only asks the system", "lsappinfo info -only pid net.maben.chain", set(), live),
+        ("osascript with a bundle ID", "osascript -e 'tell application id \"net.maben.chain\" to activate'", {"net.maben.chain"}, live),
+        ("in quotes in an osascript call", "osascript ./tools/windows.scpt \"Dia\"", {"company.thebrowser.dia"}, live),
+        ("in quotes in code being written is not a request", "python3 - <<'EOF'\ns = open('a.swift').read().replace('\"Dia\"', '\"Arc\"')\nEOF", set(), live),
+        ("its .app in a file path is not a request", "plutil -p build/Chain.app/Contents/Info.plist", set(), live),
         ("a word in a path is not a request", "cd ~/Projects/chain && grep -rn Chain Sources/ | head", set(), live),
         ("lowercase name is not a request", "git commit -m 'fix notes view'", set(), live),
         ("a list left by an app that is gone is ignored", "defaults read com.apple.Notes", set(), stale),
@@ -184,9 +199,10 @@ with tempfile.TemporaryDirectory() as scratch:
             check(f"wake: {title}", needs(d) == want, f"{needs(d)} for {command!r}")
     with tempfile.TemporaryDirectory() as d:
         claude("PreToolUse", d, frozen=live, tool_name="mcp__computer-use__open_application", tool_input={"app": "Freeform"})
-        claude("PreToolUse", d, frozen=live, tool_name="mcp__notes__search", tool_input={"query": "groceries", "target": "Notes"})
+        claude("PreToolUse", d, frozen=live, tool_name="mcp__notes__search", tool_input={"query": "groceries", "target": "com.apple.Notes"})
+        claude("PreToolUse", d, frozen=live, tool_name="mcp__claude-in-chrome__computer", tool_input={"action": "Notes"})
         claude("PreToolUse", d, frozen=live, tool_name="Read", tool_input={"file_path": "Notes"})
-        check("wake: an MCP tool's app argument, or a value that is a frozen app", needs(d) == {"Freeform", "com.apple.Notes"}, f"{needs(d)}")
+        check("wake: an MCP tool's app argument, or a frozen app's bundle ID", needs(d) == {"Freeform", "com.apple.Notes", "browser"}, f"{needs(d)}")
 
     # A failed command while apps are frozen: one line for Claude Code.
     def hint(out):

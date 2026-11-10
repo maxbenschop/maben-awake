@@ -199,9 +199,19 @@ let regexes: [NSRegularExpression] = [
     #"tell (?:application|app) id \\?"([^"\\]+)\\?""#,       // tell application id "com.apple.Notes"
     // open "/Applications/Visual Studio Code.app", open -n build/Chain.app
     #"\bopen(?: -[a-zA-Z]+)* (?:\\?"(?:[^"\\]*/)?([^"/\\]+)\.app/?\\?"|'(?:[^']*/)?([^'/]+)\.app/?'|(?:[^\s"';&|]*/)?([^\s"'/;&|]+)\.app\b)"#,
-    // A frozen app ignores SIGTERM until it is woken: pkill -x Chain, killall "Visual Studio Code"
-    #"\b(?:pkill|killall)(?: +-[a-zA-Z0-9]+)* +(?:\#(quoted)|([A-Za-z0-9][A-Za-z0-9._-]*))"#,
 ].map { regex($0) }
+
+/// A frozen app ignores SIGTERM until it is woken: pkill -x Chain, killall "Visual Studio Code",
+/// pkill -f "Chain.app/Contents/MacOS/Chain". Only what looks like an app's name counts
+/// (`pkill -f "next start"` names no app).
+let killRegex = regex(#"\b(?:pkill|killall)(?: +-[a-zA-Z0-9]+)* +(?:\#(quoted)|([^\s"';&|]+))"#)
+func appsKilled(in command: String) -> Set<String> {
+    Set(captures([killRegex], in: command).compactMap { target in
+        if let r = target.range(of: #"([^/]+)\.app\b"#, options: .regularExpression) { return String(target[r].dropLast(4)) }
+        let isName = target.first?.isUppercase == true && target.range(of: #"^[A-Za-z0-9][A-Za-z0-9 ._()-]*$"#, options: .regularExpression) != nil
+        return isName ? target : nil
+    })
+}
 
 /// AppleScript and JavaScript for Automation name apps in more ways than `tell`.
 let scriptRegexes: [NSRegularExpression] = [
@@ -226,7 +236,7 @@ let agentDesktopRegexes: [NSRegularExpression] = [
 let notApps: Set<String> = ["", "System Events", "Finder"]
 
 func appsMentioned(in command: String) -> Set<String> {
-    var apps = captures(regexes, in: command)
+    var apps = captures(regexes, in: command).union(appsKilled(in: command))
     if contains(scripting, command) { apps.formUnion(captures(scriptRegexes, in: command)) }
     if contains(opensBrowser, command) { apps.insert("browser") }
     if command.contains("agent-desktop") { apps.formUnion(captures(agentDesktopRegexes, in: command)) }
@@ -254,25 +264,32 @@ let frozen: [FrozenApp] = {
     }
 }()
 
-/// Frozen apps that `text` names. Strict (before a command runs): the bundle
-/// ID anywhere, or the name in quotes, as `<name>.app`, or after a word that
-/// names an app (`-a`, `--app`, `process`, `pkill`…). Loose (in an error
-/// message): the name anywhere as a word.
+/// Frozen apps that `text` names. Strict (a command about to run): the name or
+/// bundle ID where a command addresses an app (`-a`, `-b`, `--app`, `process`,
+/// `id`, `pkill`, `killall`), the name as `<name>.app` after `open`
+/// or a kill, or in quotes in an `osascript` call. A name in a path or in a
+/// `defaults` domain, or asked about with `pgrep` or `lsappinfo`, doesn't count:
+/// nothing there needs the app to answer.
+/// Loose (an error message): the name or bundle ID anywhere, as a word.
 func frozenApps(namedIn text: String, loose: Bool) -> [FrozenApp] {
     guard !frozen.isEmpty, !text.isEmpty else { return [] }
     let lower = text.lowercased()
+    let script = text.contains("osascript")
     return frozen.filter { app in
-        let id = app.bundle.lowercased()
-        if id.contains("."), let r = lower.range(of: id) {
-            let next = r.upperBound < lower.endIndex ? lower[r.upperBound] : " "
-            if !(next.isLetter || next.isNumber || next == "-") { return true }
+        let id = NSRegularExpression.escapedPattern(for: app.bundle)
+        if app.bundle.contains("."), lower.contains(app.bundle.lowercased()) {
+            let pattern = loose ? #"(?<![\w.-])\#(id)(?![\w-])"#
+                : #"(?:-b|--app|--app=|\bid) +\\?["']?\#(id)(?![\w-])"#
+            if contains(regex(pattern, .caseInsensitive), text) { return true }
         }
-        guard app.name.count >= 2, !notApps.contains(app.name) else { return false }
+        guard app.name.count >= 2, !notApps.contains(app.name),
+              loose ? lower.contains(app.name.lowercased()) : text.contains(app.name) else { return false }
         let name = NSRegularExpression.escapedPattern(for: app.name)
-        let pattern = loose
-            ? #"(?<![\w-])\#(name)(?![\w-])"#
-            : #"(?:\\?"\#(name)\\?"|'\#(name)'|(?<![\w-])\#(name)\.app\b|(?:-a|--app|--app=|process|pkill(?: +-\w+)*|killall(?: +-\w+)*|pgrep(?: +-\w+)*) +\#(name)(?![\w-]))"#
-        return contains(regex(pattern, loose ? .caseInsensitive : []), text)
+        if loose { return contains(regex(#"(?<![\w-])\#(name)(?![\w-])"#, .caseInsensitive), text) }
+        let addressed = #"(?:-a|--app|--app=|\bprocess|\bpkill(?: +-\w+)*|\bkillall(?: +-\w+)*) +\\?["']?\#(name)(?![\w-])"#
+        let bundle = #"\b(?:open|pkill|killall)\b[^\n;&|]*?(?<![\w-])\#(name)\.app\b"#
+        let quoted = #"(?:\\?"\#(name)\\?"|'\#(name)')"#
+        return contains(regex(addressed), text) || contains(regex(bundle), text) || (script && contains(regex(quoted), text))
     }
 }
 
@@ -291,15 +308,15 @@ func strings(in value: Any, depth: Int = 0) -> [(key: String?, value: String)] {
 }
 
 /// Apps that an MCP or computer-use tool call names in its arguments: a field
-/// called `app`, `apps`, `bundle_id`… or any value that is a frozen app's name.
+/// called `app`, `apps`, `bundle_id`…, or a value that is a frozen app's bundle
+/// ID. (Not a value that is just a name: a browser tool's `"action": "screenshot"`
+/// isn't Apple's Screenshot app.)
 func appsInArguments() -> Set<String> {
     let appKeys: Set<String> = ["app", "apps", "app_name", "appname", "application", "applications", "bundle_id", "bundleid"]
     var apps = Set<String>()
     for (key, value) in strings(in: input) {
         if let key, appKeys.contains(key.lowercased()) { apps.insert(value) }
-        for app in frozen where value.caseInsensitiveCompare(app.name) == .orderedSame || value.caseInsensitiveCompare(app.bundle) == .orderedSame {
-            apps.insert(app.bundle)
-        }
+        for app in frozen where value.caseInsensitiveCompare(app.bundle) == .orderedSame { apps.insert(app.bundle) }
     }
     return apps.subtracting(notApps)
 }
@@ -309,12 +326,29 @@ func appsInArguments() -> Set<String> {
 /// Statuses of a background task that has ended.
 let finished: Set<String> = ["completed", "failed", "killed", "stopped", "cancelled", "canceled", "error", "done", "exited"]
 
+/// The command without heredoc bodies and quoted text, where `&` and words
+/// like `nohup` are data (URLs, AppleScript, code being written to a file).
+func shellWords(_ command: String) -> String {
+    var text = withoutHeredocs(command)
+    for pattern in [#"'[^']*'"#, #""(?:[^"\\]|\\.)*""#] {
+        text = regex(pattern).stringByReplacingMatches(in: text, range: NSRange(text.startIndex..., in: text), withTemplate: " '' ")
+    }
+    return text
+}
+
+let heredoc = regex(#"<<-?\s*['"]?(\w+)['"]?[^\n]*\n[\s\S]*?\n\s*\1(?=\s|$)"#)
+func withoutHeredocs(_ command: String) -> String {
+    guard command.contains("<<") else { return command }
+    return heredoc.stringByReplacingMatches(in: command, range: NSRange(command.startIndex..., in: command), withTemplate: " ")
+}
+
 /// A command that leaves something running after it returns: `nohup`, or a
 /// lone `&` that nothing in the command waits for or kills again.
 func detaches(_ command: String) -> Bool {
-    if command.range(of: #"\b(nohup|setsid|disown)\b"#, options: .regularExpression) != nil { return true }
-    guard command.range(of: #"(?<![&>|<\\0-9])&(?![&>])"#, options: .regularExpression) != nil else { return false }
-    return command.range(of: #"\b(wait|kill|pkill)\b"#, options: .regularExpression) == nil
+    let words = shellWords(command)
+    if words.range(of: #"\b(nohup|setsid|disown)\b"#, options: .regularExpression) != nil { return true }
+    guard words.range(of: #"(?<![&>|<\\])&(?=\s|$|\))"#, options: .regularExpression) != nil else { return false }
+    return words.range(of: #"\b(wait|kill|pkill)\b"#, options: .regularExpression) == nil
 }
 
 // MARK: Hint after a failure
@@ -324,8 +358,9 @@ func detaches(_ command: String) -> Bool {
 let symptom = regex(#"-1712|-1708|-609|AppleEvent timed out|timed out|time out|timeout|not responding|isn.t responding|Connection is invalid|cannot ?complete|-25204|kAXError"#, .caseInsensitive)
 /// The same, but only codes an app's own output wouldn't print by accident.
 let strongSymptom = regex(#"-1712|-609|AppleEvent timed out|Connection is invalid|-25204"#, .caseInsensitive)
-/// Commands that talk to apps.
-let talksToApps = regex(#"osascript|\bopen\b|agent-desktop|lsappinfo|screencapture|System Events|Application\(|cliclick|peekaboo|shortcuts run|\.app\b"#)
+/// Commands that talk to apps. Only these are compared with the frozen apps:
+/// an app's name in a path or in code being edited doesn't mean the app is used.
+let talksToApps = regex(#"osascript|(?:^|[;&|(`$]\s*|\n\s*|\bthen\s+|\bdo\s+)open\s|agent-desktop|lsappinfo|screencapture|System Events|Application\(|cliclick|peekaboo|shortcuts run|\bpkill\b|\bkillall\b"#)
 
 /// One line for the agent when a tool call failed while apps were frozen, or
 /// nil. An app the error names is woken here, so a retry just works.
@@ -388,8 +423,10 @@ if let fh = FileHandle(forWritingAtPath: logPath) ?? {
 func wakeApps(for owner: pid_t) {
     var apps = Set<String>()
     if isShell, let command {
-        // A frozen app found by both goes by its bundle ID only.
-        let named = frozenApps(namedIn: command, loose: false)
+        // A frozen app found by both goes by its bundle ID only. Heredocs are
+        // mostly code being written to a file, unless they go to osascript.
+        let spoken = command.contains("osascript") ? command : withoutHeredocs(command)
+        let named = contains(talksToApps, spoken) ? frozenApps(namedIn: spoken, loose: false) : []
         apps = appsMentioned(in: command).subtracting(named.map(\.name)).union(named.map(\.bundle))
     } else if tool.lowercased().contains("mcp") || tool.lowercased().contains("computer") {
         apps = appsInArguments()
