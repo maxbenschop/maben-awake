@@ -496,7 +496,8 @@ struct AIPane: View {
 
     /// Agents that aren't set up on this Mac, for the note under the list.
     private var otherAgents: String {
-        Integration.agents.filter { agent in !agents.contains { $0.0.id == agent.id } }.map(\.name).joined(separator: ", ")
+        Integration.agents.filter { agent in !agents.contains { $0.0.id == agent.id } }
+            .map { $0.tested ? $0.name : $0.name + " (not tested yet)" }.joined(separator: ", ")
     }
 
     private func setHooks(install: Bool) {
@@ -539,8 +540,9 @@ struct AIPane: View {
                 ForEach(agents, id: \.0.id) { agent, status in
                     IntegrationRow(image: agent.id == "codex" ? BrandLogo.openAI : nil, icon: agent.id == "codex" ? nil : "sparkles",
                                    title: agent.name,
-                                   detail: status == .installed ? agent.afterConnecting ?? "Connected in \(Integration.tilde(Integration.file(of: agent)))"
-                                        : "Keeps the Mac awake while it works.",
+                                   detail: (agent.tested ? "" : "Not tested yet. ")
+                                        + (status == .installed ? agent.afterConnecting ?? "Connected in \(Integration.tilde(Integration.file(of: agent)))"
+                                           : "Keeps the Mac awake while it works."),
                                    reveal: status == .missing ? nil : Integration.file(of: agent), status: status,
                                    enabled: canInstall, flashing: justChanged == agent.id) { set(agent, install: $0) }
                 }

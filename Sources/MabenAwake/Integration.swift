@@ -195,6 +195,9 @@ enum Integration {
         var toolEvents: Set<String> = []
         /// What's left to do after connecting, if anything.
         var afterConnecting: String? = nil
+        /// Run for real with the agent itself. The others are built from the agent's
+        /// documentation only (they need an account), and Settings says so.
+        var tested = true
     }
 
     static let agents: [Agent] = [
@@ -202,8 +205,10 @@ enum Integration {
         Agent(id: "codex", name: "Codex", folder: ".codex", file: ".codex/hooks.json", layout: .groups,
               events: ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Interrupt", "SessionEnd"],
               afterConnecting: "Run /hooks in Codex once to trust them."),
+        // No preToolUse: Cursor blocks a tool call whose hook answers anything but a valid decision,
+        // and a hook that answers "allow" has not been tried against Cursor's own approval prompts.
         Agent(id: "cursor", name: "Cursor", folder: ".cursor", file: ".cursor/hooks.json", layout: .entries,
-              events: ["beforeSubmitPrompt", "preToolUse", "postToolUse", "stop", "sessionEnd"]),
+              events: ["beforeSubmitPrompt", "postToolUse", "stop", "sessionEnd"], tested: false),
         Agent(id: "gemini", name: "Gemini CLI", folder: ".gemini", file: ".gemini/settings.json", layout: .groups,
               events: ["BeforeAgent", "BeforeTool", "AfterTool", "AfterAgent", "SessionEnd"],
               toolEvents: ["BeforeTool", "AfterTool"], afterConnecting: "Works from the next Gemini CLI session."),
@@ -217,15 +222,15 @@ enum Integration {
         // Droid reads ~/.factory/hooks.json, or the hooks in its settings.json when that file is missing: see `file(of:)`.
         Agent(id: "droid", name: "Droid", folder: ".factory", file: ".factory/hooks.json", layout: .groups,
               events: ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "Notification", "SessionEnd"],
-              toolEvents: ["PreToolUse", "PostToolUse"], afterConnecting: "Works from the next Droid session."),
+              toolEvents: ["PreToolUse", "PostToolUse"], afterConnecting: "Works from the next Droid session.", tested: false),
         Agent(id: "devin", name: "Devin", folder: ".config/devin", file: ".config/devin/config.json", layout: .groups,
               events: ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"],
-              toolEvents: ["PreToolUse", "PostToolUse"], afterConnecting: "Works from the next Devin session."),
+              toolEvents: ["PreToolUse", "PostToolUse"], afterConnecting: "Works from the next Devin session.", tested: false),
         Agent(id: "auggie", name: "Augment", folder: ".augment", file: ".augment/settings.json", layout: .groups,
               events: ["PromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"],
-              toolEvents: ["PreToolUse", "PostToolUse"], afterConnecting: "Works from the next Augment session."),
+              toolEvents: ["PreToolUse", "PostToolUse"], afterConnecting: "Works from the next Augment session.", tested: false),
         Agent(id: "kiro", name: "Kiro", folder: ".kiro", file: ".kiro/hooks/maben-awake.json",
-              layout: .ownFile(kiroFile), afterConnecting: "Works from the next Kiro CLI session."),
+              layout: .ownFile(kiroFile), afterConnecting: "Works from the next Kiro CLI session.", tested: false),
     ]
 
     static func agent(_ id: String) -> Agent { agents.first { $0.id == id }! }

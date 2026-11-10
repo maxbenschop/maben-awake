@@ -6,6 +6,8 @@ builds as the GitHub release notes, the app shows it under About, and awake.mabe
 ## 1.5 · 10 November 2026
 
 - Works with nine more agents: Cursor, Gemini CLI, GitHub Copilot (in the terminal and in VS Code), OpenCode, Qwen Code, Droid, Devin, Augment and Kiro. Settings shows the ones set up on your Mac, each with a Connect button.
+- Cursor, Droid, Devin, Augment and Kiro are marked Not tested yet: they are built from their documentation. If one doesn't keep your Mac awake, tell us on the support page.
+- If you use Codex: it asks to review the hooks again after this update. Run `/hooks` in Codex once.
 - The menu names the agent that is working, such as Cursor is working.
 - An app woken with `awake need` inside any of these agents freezes again when that agent's turn ends, as with Claude Code.
 - Two Codex sessions started within a minute of each other no longer share one request.

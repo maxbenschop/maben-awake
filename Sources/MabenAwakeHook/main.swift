@@ -242,6 +242,12 @@ if kind == .toolStart {
     }
 }
 
+// Cursor only reports a tool once it has finished (see Integration.swift), so the
+// apps a command names are woken then: in time for the agent's next try.
+if agent == "cursor", kind == .toolEnd, isShell, let command {
+    for app in appsMentioned(in: command) { need(app, owner: owner) }
+}
+
 switch kind {
 case .stop:
     release(name)
@@ -255,9 +261,7 @@ case .toolStart:
     // 15 min is plenty and limits a stale lease if Stop is ever missed.
     hold(name, minutes: 120, owner: owner)
 default:
-    hold(name, minutes: 15, owner: owner)
+    // Cursor doesn't say when a tool starts, so its hold has to cover a long tool from the start.
+    hold(name, minutes: agent == "cursor" ? 120 : 15, owner: owner)
 }
-
-// Cursor blocks a tool call whose hook doesn't answer; every other agent wants silence.
-if agent == "cursor", argument("--event") == "preToolUse" { print(#"{"permission":"allow"}"#) }
-exit(0)
+exit(0)   // prints nothing: no agent takes that for a decision

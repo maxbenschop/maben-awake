@@ -93,8 +93,9 @@ let cursor = Integration.agent("cursor")
 try Integration.install(cursor); try Integration.install(cursor)
 let cursorHooks = json(".cursor/hooks.json")["hooks"] as? [String: [[String: Any]]] ?? [:]
 check("cursor installed, once, with its own event names", Integration.status(of: cursor) == .installed
-      && cursorHooks["preToolUse"]?.compactMap { $0["command"] as? String } == [mine + " --agent cursor --event preToolUse"]
+      && cursorHooks["postToolUse"]?.compactMap { $0["command"] as? String } == [mine + " --agent cursor --event postToolUse"]
       && cursorHooks["beforeSubmitPrompt"]?.count == 1 && json(".cursor/hooks.json")["version"] as? Int == 1)
+check("cursor gets no hook that could block or approve a tool call", cursorHooks["preToolUse"] == nil && cursorHooks["beforeShellExecution"] == nil)
 check("cursor keeps other hook", cursorHooks["stop"]?.compactMap { $0["command"] as? String } == ["echo mine", mine + " --agent cursor --event stop"])
 try Integration.remove(cursor)
 check("cursor removed, other hook kept", Integration.status(of: cursor) == .missing

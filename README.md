@@ -127,15 +127,15 @@ working*, *Gemini CLI is working* and so on in the menu.
 | Agent | Where the hooks go | Notes |
 |---|---|---|
 | Codex | `~/.codex/hooks.json` | run `/hooks` in Codex once to trust them; also set by `./build.sh install` |
-| Cursor (editor and CLI) | `~/.cursor/hooks.json` | the hook answers `{"permission":"allow"}` to `preToolUse`, because Cursor blocks a tool call whose hook says nothing |
+| Cursor (editor and CLI) | `~/.cursor/hooks.json` | not tested yet. No `preToolUse`: Cursor blocks a tool call whose hook answers anything but a valid decision, so the hold is 2 hours from the prompt on, and apps a command names are woken once it has finished |
 | Gemini CLI | `~/.gemini/settings.json` | end of turn is `AfterAgent` |
 | GitHub Copilot (CLI and VS Code) | `~/.copilot/hooks/maben-awake.json` | our own file; needs Copilot CLI 1.0.6 or later |
 | OpenCode | `~/.config/opencode/plugins/maben-awake.js` | a plugin, since OpenCode has no hooks; it passes each event to the hook |
 | Qwen Code | `~/.qwen/settings.json` | |
-| Droid | `~/.factory/hooks.json`, or `settings.json` when that already has hooks | Droid ignores the hooks in its settings once `hooks.json` exists |
-| Devin (was Windsurf) | `~/.config/devin/config.json` | |
-| Augment | `~/.augment/settings.json` | |
-| Kiro | `~/.kiro/hooks/maben-awake.json` | our own file; Kiro CLI 3 or later |
+| Droid | `~/.factory/hooks.json`, or `settings.json` when that already has hooks | not tested yet. Droid ignores the hooks in its settings once `hooks.json` exists |
+| Devin (was Windsurf) | `~/.config/devin/config.json` | not tested yet |
+| Augment | `~/.augment/settings.json` | not tested yet |
+| Kiro | `~/.kiro/hooks/maben-awake.json` | not tested yet. Our own file; Kiro CLI 3 or later |
 
 Files shared with the agent keep everything else in them, and get one backup
 (`<file>.before-maben-awake`) the first time. A settings file that isn't plain
@@ -144,8 +144,17 @@ hooks in Claude Code's settings; the hook recognises them, so connecting both
 doesn't count a session twice.
 
 `tests/agent-hooks-test.py` feeds the hook what each agent sends, as its
-documentation describes it. OpenCode (1.19.5) was also run for real with its
-plugin; the other new agents are only tested against their documentation.
+documentation describes it. Claude Code, Codex (0.156), GitHub Copilot CLI
+(1.0.108), OpenCode (1.19.5), Gemini CLI (0.67) and Qwen Code were also run for
+real: a prompt, a shell command and the end of the turn each reached the hook
+and left the right requests. Cursor, Droid, Devin, Augment and Kiro need an
+account and are built from their documentation only (`tested: false` in
+`Integration.agents`); Settings shows them as "Not tested yet", and none of
+their hooks can block or approve anything, so the worst case is that the Mac
+isn't kept awake.
+
+Codex ties its approval of a hook to the command. The hook's path changed in
+1.5, so Codex asks to review the hooks again: run `/hooks` once.
 
 Not connected: Amp, Pi and Cline (plugins that have to answer for every tool
 call), Goose and Crush, and Aider and Zed (no hooks at all). They can still

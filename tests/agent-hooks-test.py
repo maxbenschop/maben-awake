@@ -82,14 +82,15 @@ def check(title, ok, detail=""):
 for label, (prompt, start, end, stop, close) in AGENTS.items():
     agent = label.split()[0]; lease = f"{agent}-{SID[-8:]}"
     with tempfile.TemporaryDirectory() as d:
+        # Cursor is connected without a tool-start event, so its hold is 2 h from the prompt on.
+        idle = 120 if agent == "cursor" else 15
         out = call(agent, *prompt, d); got = leases(d)
-        check(f"{label}: prompt holds 15 min", got == {lease: 15} and out == "", f"{got} {out!r}")
+        check(f"{label}: prompt holds {idle} min", got == {lease: idle} and out == "", f"{got} {out!r}")
         out = call(agent, *start, d); got = leases(d)
-        want_out = '{"permission":"allow"}\n' if agent == "cursor" else ""
-        check(f"{label}: tool start holds 2 h and wakes Dia and Spotify",
-              got == {lease: 120, "need-Dia": 10, "need-Spotify": 10} and out == want_out, f"{got} {out!r}")
+        check(f"{label}: tool start holds 2 h and wakes Dia and Spotify, and prints nothing",
+              got == {lease: 120, "need-Dia": 10, "need-Spotify": 10} and out == "", f"{got} {out!r}")
         call(agent, *end, d); got = leases(d)
-        check(f"{label}: tool end drops to 15 min", got.get(lease) == 15, f"{got}")
+        check(f"{label}: tool end drops to {idle} min", got.get(lease) == idle, f"{got}")
         call(agent, *stop, d); got = leases(d)
         check(f"{label}: end of turn releases everything", got == {}, f"{got}")
         call(agent, *start, d); call(agent, *close, d); got = leases(d)
@@ -106,8 +107,8 @@ with tempfile.TemporaryDirectory() as d:
     call("gemini", "BeforeTool", {"session_id": SID, "tool_name": "run_shell_command", "tool_input": {"command": "npm run dev", "is_background": True}}, d)
     check("gemini: background command gets its own hold", leases(d).get(f"gemini-{SID[-8:]}-bg") == 30, f"{leases(d)}")
 with tempfile.TemporaryDirectory() as d:
-    call("cursor", "preToolUse", {"conversation_id": SID, "tool_name": "MCP:browser_navigate", "tool_input": {"url": "x"}}, d)
-    check("cursor: a browser tool wakes the browser", "need-browser" in leases(d), f"{leases(d)}")
+    call("cursor", "postToolUse", {"conversation_id": SID, "tool_name": "Shell", "tool_input": {"command": OPEN}}, d)
+    check("cursor: a finished command wakes the apps it named, for the next try", {"need-Dia", "need-Spotify"} <= set(leases(d)), f"{leases(d)}")
 with tempfile.TemporaryDirectory() as d:
     # Cursor also runs the hooks in Claude Code's settings (no --agent); the lease is still Cursor's, and nothing is printed.
     out = call("", "", {"conversation_id": SID, "hook_event_name": "PreToolUse", "cursor_version": "2.4.0", "tool_name": "Shell", "tool_input": {"command": "ls"}}, d, flags=False)
