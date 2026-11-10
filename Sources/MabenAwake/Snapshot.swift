@@ -65,8 +65,15 @@ enum Snapshot {
         guard let i = args.firstIndex(of: "--snapshot"), i + 1 < args.count else { return }
         let dir = URL(fileURLWithPath: args[i + 1], isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        useDemoConnections()
+        // The version in Info.plist, which a debug build doesn't bundle.
+        let plist = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../Info.plist")
+        Updater.shared.versionOverride = (NSDictionary(contentsOf: plist)?["CFBundleShortVersionString"] as? String) ?? "dev"
         _ = NSApplication.shared
         NSApp.setActivationPolicy(.prohibited)
+        // A debug build has no app icon in its bundle; use the one build.sh renders.
+        let iconFile = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../../build/AppIcon.icns")
+        if let image = NSImage(contentsOf: iconFile) { image.setName("AppIcon"); NSApp.applicationIconImage = image }
 
         func icon(_ id: String) -> NSImage? {
             NSWorkspace.shared.urlForApplication(withBundleIdentifier: id).map { NSWorkspace.shared.icon(forFile: $0.path) }
@@ -126,6 +133,25 @@ enum Snapshot {
         }
         print("Snapshots written to \(dir.path)")
         exit(0)
+    }
+
+    /// Points Settings → Agents at a scratch home folder with a typical setup
+    /// (Claude Code and Codex connected, a few other agents installed), so the
+    /// pictures don't depend on, or show, this Mac's own configuration.
+    private static func useDemoConnections() {
+        let fm = FileManager.default
+        let home = fm.temporaryDirectory.appendingPathComponent("maben-awake-snapshot-home")
+        try? fm.removeItem(at: home)
+        Integration.home = home
+        Integration.bundle = URL(fileURLWithPath: "/Applications/Maben Awake.app")
+        for folder in [".claude", ".codex", ".cursor", ".gemini", ".copilot", ".local/bin"] {
+            try? fm.createDirectory(at: home.appendingPathComponent(folder), withIntermediateDirectories: true)
+        }
+        _ = try? Integration.installHooks()
+        try? Integration.install(Integration.agent("codex"))
+        let cli = home.appendingPathComponent(".local/bin/awake").path
+        Integration.cliCandidates = [cli]
+        try? fm.createSymbolicLink(atPath: cli, withDestinationPath: Integration.cliTarget)
     }
 
     private static func render<V: View>(_ view: V, _ name: String, _ appearance: NSAppearance.Name,

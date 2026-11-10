@@ -57,7 +57,9 @@ final class Updater: ObservableObject {
     private var wakeObserver: NSObjectProtocol?
     private var downloadObservation: NSKeyValueObservation?
 
-    var currentVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
+    /// Set by `--snapshot`, whose debug build has no Info.plist.
+    var versionOverride: String?
+    var currentVersion: String { versionOverride ?? Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
 
     var available: Release? {
         switch state {
