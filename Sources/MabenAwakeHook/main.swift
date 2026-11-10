@@ -201,7 +201,8 @@ let regexes: [NSRegularExpression] = [
     #"\bopen(?: -[a-zA-Z]+)* (?:\\?"(?:[^"\\]*/)?([^"/\\]+)\.app/?\\?"|'(?:[^']*/)?([^'/]+)\.app/?'|(?:[^\s"';&|]*/)?([^\s"'/;&|]+)\.app\b)"#,
 ].map { regex($0) }
 
-/// A frozen app ignores SIGTERM until it is woken: pkill -x Chain, killall "Visual Studio Code",
+/// An app that quits cleanly on SIGTERM (Chromium and Electron apps among them)
+/// can't while it is frozen, so a kill wakes it: pkill -x Chain, killall "Visual Studio Code",
 /// pkill -f "Chain.app/Contents/MacOS/Chain". Only what looks like an app's name counts
 /// (`pkill -f "next start"` names no app).
 let killRegex = regex(#"\b(?:pkill|killall)(?: +-[a-zA-Z0-9]+)* +(?:\#(quoted)|([^\s"';&|]+))"#)
