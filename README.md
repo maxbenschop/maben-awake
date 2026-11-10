@@ -174,7 +174,19 @@ other agents do the same through their own events, see above):
 | Hook | What it does |
 |---|---|
 | `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | hold a lease named `<agent>-<session>` (`claude-3f2a…`): 15 minutes, or 2 hours while a tool runs (refreshed on every prompt and tool call) |
-| `Stop`, `SessionEnd` | release the lease |
+| `Stop`, `SessionEnd` | release the lease; at `Stop`, background work Claude Code says is still running keeps a lease `<agent>-<session>-bg` until a later turn ends with none (at most 8 hours after the last turn) |
+| `PostToolUseFailure` | if apps are frozen and the failure looks like a frozen app (a timed-out Apple event, a hang), tell Claude Code in one line; an app the error names is woken |
+
+The hook wakes an app when a tool call is about to use it, so agents don't have
+to ask: `tell application "X"`, System Events' `tell process "X"`, JavaScript
+for Automation's `Application("X")`, `open -a X`, `open -b <bundle ID>`,
+`open X.app`, `pkill` / `killall X`, `agent-desktop --app X`, `docker`, and
+`open <link>` for the default browser. Maben Awake also writes the apps it
+has frozen to `~/Library/Application Support/MabenAwake/frozen`, and any
+command that names one of those (its bundle ID, its name in quotes or as
+`X.app`) wakes it too. Background commands and anything detached with
+`nohup` or `&` keep the Mac awake as well, so `awake run` is only needed for
+scripts and agents without hooks.
 
 Leases show up in the menu as *AI requests* with a countdown and an ✕ to
 release them by hand. Any script can use the same mechanism:
@@ -243,7 +255,7 @@ so a lease can never outlive its expiry even if the tool crashes.
 |---|---|
 | **Always on** | never frozen |
 | **While AI works** | awake while any agent's turn (or `awake run`) is active |
-| **When AI asks** (default) | frozen until an AI requests it with `awake need <app>`; frozen again when that AI's turn ends |
+| **When AI asks** (default) | frozen until an AI uses it: a command that names it wakes it, or `awake need <app>`; frozen again when that AI's turn ends |
 
 Apps running from outside `/Applications` (an Xcode or `swift build`
 product, a test build in `/tmp`) are treated as apps under development: with

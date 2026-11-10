@@ -11,6 +11,15 @@
 // wake them. Same behaviour as `awake hook`, but without starting a shell and
 // a dozen helper processes per call.
 //
+// The agent should never have to think about any of this, so the hook does
+// the work an agent used to be told to do:
+// - work left running in the background keeps the Mac awake until it ends
+//   (Claude Code lists it at the end of every turn);
+// - a tool call that names a frozen app wakes it (the app writes the list of
+//   frozen apps, see `frozenPath`);
+// - if a command still fails while apps are frozen, Claude Code gets one line
+//   saying so (and the app is woken when the error names it).
+//
 // Lease files: ~/Library/Application Support/MabenAwake/leases/<name>
 // containing "<expiry unix time> <owner pid> [app]".
 import Foundation
@@ -19,6 +28,10 @@ let env = ProcessInfo.processInfo.environment
 let home = FileManager.default.homeDirectoryForCurrentUser.path
 let leaseDir = env["MABEN_AWAKE_LEASES"] ?? home + "/Library/Application Support/MabenAwake/leases"
 let logPath = env["MABEN_AWAKE_HOOK_LOG"] ?? home + "/Library/Logs/MabenAwake-hooks.log"
+/// Apps Maben Awake has frozen right now, one `<bundle ID>\t<name>` per line.
+/// Tests that move the leases elsewhere get no list unless they name one.
+let frozenPath: String? = env["MABEN_AWAKE_FROZEN"]
+    ?? (env["MABEN_AWAKE_LEASES"] == nil ? home + "/Library/Application Support/MabenAwake/frozen" : nil)
 
 // MARK: Leases
 
@@ -152,12 +165,54 @@ func agentAncestor() -> pid_t {
 
 // MARK: App detection
 
+func regex(_ pattern: String, _ options: NSRegularExpression.Options = []) -> NSRegularExpression {
+    try! NSRegularExpression(pattern: pattern, options: options)
+}
+
+/// Every capture group of every match, for each pattern.
+func captures(_ patterns: [NSRegularExpression], in text: String) -> Set<String> {
+    var found = Set<String>()
+    let range = NSRange(text.startIndex..., in: text)
+    for re in patterns {
+        for m in re.matches(in: text, range: range) {
+            for i in 1..<m.numberOfRanges {
+                if let r = Range(m.range(at: i), in: text) { found.insert(String(text[r])) }
+            }
+        }
+    }
+    return found
+}
+
+func contains(_ re: NSRegularExpression, _ text: String) -> Bool {
+    re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+}
+
+/// A value in quotes: "X", \"X\" (inside a double-quoted string) or 'X'.
+let quoted = #"(?:\\?"([^"\\]+)\\?"|'([^']+)')"#
+
 let regexes: [NSRegularExpression] = [
     // Quotes may be escaped: osascript -e "tell application \"Dia\" to …"
     #"tell (?:application|app) \\?"([^"\\]+)\\?""#,          // osascript -e 'tell application "Dia" …'
     #"\bopen(?: -[a-zA-Z]+)* -a \\?"([^"\\]+)\\?""#,         // open -a "Visual Studio Code", open -g -a "X"
     #"\bopen(?: -[a-zA-Z]+)* -a ([A-Za-z0-9.]+)"#,          // open -a Dia, open -g -a TextEdit
-].map { try! NSRegularExpression(pattern: $0) }
+    #"\bopen(?: -[a-zA-Z]+)* -b ([A-Za-z0-9.-]+)"#,         // open -b com.apple.TextEdit
+    #"tell (?:application|app) id \\?"([^"\\]+)\\?""#,       // tell application id "com.apple.Notes"
+    // open "/Applications/Visual Studio Code.app", open -n build/Chain.app
+    #"\bopen(?: -[a-zA-Z]+)* (?:\\?"(?:[^"\\]*/)?([^"/\\]+)\.app/?\\?"|'(?:[^']*/)?([^'/]+)\.app/?'|(?:[^\s"';&|]*/)?([^\s"'/;&|]+)\.app\b)"#,
+    // A frozen app ignores SIGTERM until it is woken: pkill -x Chain, killall "Visual Studio Code"
+    #"\b(?:pkill|killall)(?: +-[a-zA-Z0-9]+)* +(?:\#(quoted)|([A-Za-z0-9][A-Za-z0-9._-]*))"#,
+].map { regex($0) }
+
+/// AppleScript and JavaScript for Automation name apps in more ways than `tell`.
+let scriptRegexes: [NSRegularExpression] = [
+    #"\b(?:application|app) \\?"([^"\\]+)\\?""#,            // quit app "X", activate application "X", id of app "X"
+    #"\bprocess \\?"([^"\\]+)\\?""#,                        // System Events: tell process "Xcode"
+    #"\bApplication\(\s*\#(quoted)\s*\)"#,                  // JXA: Application("Dia"), Application('Notes')
+].map { regex($0) }
+let scripting = regex(#"osascript|AppleScript|NSAppleScript|\.scpt\b|JavaScript"#, .caseInsensitive)
+
+/// `open https://…` or `open page.html`: the default browser.
+let opensBrowser = regex(#"\bopen(?: -[a-zA-Z]+)* +\\?["']?(?:https?://|file://|[^\s"';&|]+\.html?\b)"#)
 
 // agent-desktop (vercel-labs/agent-desktop) drives apps through the accessibility
 // tree, which a frozen app can't answer. It names the app with `--app X` or as the
@@ -166,27 +221,144 @@ let regexes: [NSRegularExpression] = [
 let agentDesktopRegexes: [NSRegularExpression] = [
     #"--app(?:=| +)(?:\\?"([^"\\]+)\\?"|'([^']+)'|([A-Za-z0-9.][A-Za-z0-9._-]*))"#,
     #"agent-desktop +(?:launch|close-app)(?: +--?[a-zA-Z-]+)* +(?:\\?"([^"\\]+)\\?"|'([^']+)'|([A-Za-z0-9.][A-Za-z0-9._-]*))"#,
-].map { try! NSRegularExpression(pattern: $0) }
+].map { regex($0) }
+
+let notApps: Set<String> = ["", "System Events", "Finder"]
 
 func appsMentioned(in command: String) -> Set<String> {
-    var apps = Set<String>()
-    let range = NSRange(command.startIndex..., in: command)
-    for re in regexes {
-        for m in re.matches(in: command, range: range) {
-            if let r = Range(m.range(at: 1), in: command) { apps.insert(String(command[r])) }
-        }
-    }
-    if command.contains("agent-desktop") {
-        for re in agentDesktopRegexes {
-            for m in re.matches(in: command, range: range) {
-                for i in 1..<m.numberOfRanges {
-                    if let r = Range(m.range(at: i), in: command) { apps.insert(String(command[r])) }
-                }
-            }
-        }
-    }
+    var apps = captures(regexes, in: command)
+    if contains(scripting, command) { apps.formUnion(captures(scriptRegexes, in: command)) }
+    if contains(opensBrowser, command) { apps.insert("browser") }
+    if command.contains("agent-desktop") { apps.formUnion(captures(agentDesktopRegexes, in: command)) }
     if command.range(of: #"\b(docker|kubectl)\b"#, options: .regularExpression) != nil { apps.insert("docker") }
-    return apps.subtracting(["", "System Events", "Finder"])
+    return apps.subtracting(notApps)
+}
+
+// MARK: Frozen apps
+
+struct FrozenApp { let bundle: String; let name: String }
+
+/// The apps Maben Awake has frozen right now (empty with the lid open, so
+/// everything below costs nothing then).
+let frozen: [FrozenApp] = {
+    guard let path = frozenPath, let text = try? String(contentsOfFile: path, encoding: .utf8) else { return [] }
+    let lines = text.split(separator: "\n")
+    // The app writes its pid first; a list left behind by an app that was force quit means nothing.
+    if let first = lines.first, first.hasPrefix("pid ") {
+        guard let pid = pid_t(first.dropFirst(4)), pid > 1, kill(pid, 0) == 0 || errno == EPERM else { return [] }
+    }
+    return lines.compactMap { line in
+        let parts = line.split(separator: "\t", maxSplits: 1).map(String.init)
+        guard parts.count == 2, !parts[0].isEmpty, !parts[1].isEmpty else { return nil }
+        return FrozenApp(bundle: parts[0], name: parts[1])
+    }
+}()
+
+/// Frozen apps that `text` names. Strict (before a command runs): the bundle
+/// ID anywhere, or the name in quotes, as `<name>.app`, or after a word that
+/// names an app (`-a`, `--app`, `process`, `pkill`…). Loose (in an error
+/// message): the name anywhere as a word.
+func frozenApps(namedIn text: String, loose: Bool) -> [FrozenApp] {
+    guard !frozen.isEmpty, !text.isEmpty else { return [] }
+    let lower = text.lowercased()
+    return frozen.filter { app in
+        let id = app.bundle.lowercased()
+        if id.contains("."), let r = lower.range(of: id) {
+            let next = r.upperBound < lower.endIndex ? lower[r.upperBound] : " "
+            if !(next.isLetter || next.isNumber || next == "-") { return true }
+        }
+        guard app.name.count >= 2, !notApps.contains(app.name) else { return false }
+        let name = NSRegularExpression.escapedPattern(for: app.name)
+        let pattern = loose
+            ? #"(?<![\w-])\#(name)(?![\w-])"#
+            : #"(?:\\?"\#(name)\\?"|'\#(name)'|(?<![\w-])\#(name)\.app\b|(?:-a|--app|--app=|process|pkill(?: +-\w+)*|killall(?: +-\w+)*|pgrep(?: +-\w+)*) +\#(name)(?![\w-]))"#
+        return contains(regex(pattern, loose ? .caseInsensitive : []), text)
+    }
+}
+
+/// String values in a tool's arguments, for tools other than the shell.
+func strings(in value: Any, depth: Int = 0) -> [(key: String?, value: String)] {
+    guard depth < 4 else { return [] }
+    if let object = value as? [String: Any] {
+        return object.flatMap { key, v -> [(key: String?, value: String)] in
+            if let s = v as? String { return [(key, s)] }
+            if let list = v as? [String] { return list.map { (key, $0) } }
+            return strings(in: v, depth: depth + 1)
+        }
+    }
+    if let list = value as? [Any] { return list.flatMap { strings(in: $0, depth: depth + 1) } }
+    return []
+}
+
+/// Apps that an MCP or computer-use tool call names in its arguments: a field
+/// called `app`, `apps`, `bundle_id`… or any value that is a frozen app's name.
+func appsInArguments() -> Set<String> {
+    let appKeys: Set<String> = ["app", "apps", "app_name", "appname", "application", "applications", "bundle_id", "bundleid"]
+    var apps = Set<String>()
+    for (key, value) in strings(in: input) {
+        if let key, appKeys.contains(key.lowercased()) { apps.insert(value) }
+        for app in frozen where value.caseInsensitiveCompare(app.name) == .orderedSame || value.caseInsensitiveCompare(app.bundle) == .orderedSame {
+            apps.insert(app.bundle)
+        }
+    }
+    return apps.subtracting(notApps)
+}
+
+// MARK: Background work
+
+/// Statuses of a background task that has ended.
+let finished: Set<String> = ["completed", "failed", "killed", "stopped", "cancelled", "canceled", "error", "done", "exited"]
+
+/// A command that leaves something running after it returns: `nohup`, or a
+/// lone `&` that nothing in the command waits for or kills again.
+func detaches(_ command: String) -> Bool {
+    if command.range(of: #"\b(nohup|setsid|disown)\b"#, options: .regularExpression) != nil { return true }
+    guard command.range(of: #"(?<![&>|<\\0-9])&(?![&>])"#, options: .regularExpression) != nil else { return false }
+    return command.range(of: #"\b(wait|kill|pkill)\b"#, options: .regularExpression) == nil
+}
+
+// MARK: Hint after a failure
+
+/// Errors that a frozen app causes: Apple events and accessibility calls that
+/// get no answer, and commands that hang until they time out.
+let symptom = regex(#"-1712|-1708|-609|AppleEvent timed out|timed out|time out|timeout|not responding|isn.t responding|Connection is invalid|cannot ?complete|-25204|kAXError"#, .caseInsensitive)
+/// The same, but only codes an app's own output wouldn't print by accident.
+let strongSymptom = regex(#"-1712|-609|AppleEvent timed out|Connection is invalid|-25204"#, .caseInsensitive)
+/// Commands that talk to apps.
+let talksToApps = regex(#"osascript|\bopen\b|agent-desktop|lsappinfo|screencapture|System Events|Application\(|cliclick|peekaboo|shortcuts run|\.app\b"#)
+
+/// One line for the agent when a tool call failed while apps were frozen, or
+/// nil. An app the error names is woken here, so a retry just works.
+func hintAfterFailure(owner: pid_t) -> String? {
+    guard !frozen.isEmpty else { return nil }
+    let failed = event.lowercased() == "posttoolusefailure"
+    let response = json["tool_response"] as? [String: Any]
+    let output = (json["error"] as? String)
+        ?? [response?["stdout"], response?["stderr"]].compactMap { $0 as? String }.joined(separator: "\n")
+    let text = String(output.prefix(20_000))
+    let call = command ?? strings(in: input).map(\.value).joined(separator: " ")
+    let relevant = failed ? (contains(symptom, text) || contains(talksToApps, call)) : contains(strongSymptom, text)
+    guard relevant else { return nil }
+
+    let named = frozenApps(namedIn: call + "\n" + text, loose: true)
+    if !named.isEmpty {
+        for app in named { need(app.bundle, owner: owner) }
+        let names = named.map(\.name).joined(separator: ", ")
+        return "Maben Awake: \(names) \(named.count == 1 ? "was" : "were") frozen and \(named.count == 1 ? "is" : "are") awake now (10 min). Retry the command."
+    }
+    let names = frozen.prefix(8).map(\.name).joined(separator: ", ") + (frozen.count > 8 ? " and \(frozen.count - 8) more" : "")
+    return "Maben Awake: these apps are frozen: \(names). If the command needed one, run `awake need \"<App>\"` and retry."
+}
+
+/// The same hint at most once every 10 minutes per session.
+func isRepeat(_ hint: String, lease name: String) -> Bool {
+    let path = leaseDir + "/.hint-" + safe(name)
+    let now = Int(Date().timeIntervalSince1970)
+    if let text = try? String(contentsOfFile: path, encoding: .utf8),
+       let space = text.firstIndex(of: " "), let then = Int(text[..<space]),
+       now - then < 600, text[text.index(after: space)...] == hint { return true }
+    try? "\(now) \(hint)".write(toFile: path, atomically: true, encoding: .utf8)
+    return false
 }
 
 // MARK: Main
@@ -212,6 +384,19 @@ if let fh = FileHandle(forWritingAtPath: logPath) ?? {
     }
 }
 
+/// Wakes the apps a tool call names: by the patterns above, and any frozen app it names.
+func wakeApps(for owner: pid_t) {
+    var apps = Set<String>()
+    if isShell, let command {
+        // A frozen app found by both goes by its bundle ID only.
+        let named = frozenApps(namedIn: command, loose: false)
+        apps = appsMentioned(in: command).subtracting(named.map(\.name)).union(named.map(\.bundle))
+    } else if tool.lowercased().contains("mcp") || tool.lowercased().contains("computer") {
+        apps = appsInArguments()
+    }
+    for app in apps { need(app, owner: owner) }
+}
+
 if kind == .toolStart {
     // Work that outlives the turn gets its own lease, which Stop does not release.
     switch tool {
@@ -227,8 +412,12 @@ if kind == .toolStart {
     case "Monitor": hold(name + "-monitor", minutes: 60, owner: owner)
     default:
         // A shell command left running in the background (each agent has its own flag for it).
+        // Claude Code says at the end of the turn whether it is still running (see Stop below).
         if isShell, ["run_in_background", "is_background", "background"].contains(where: { input[$0] as? Bool == true }) {
             hold(name + "-bg", minutes: 30, owner: owner)
+        } else if isShell, let command, detaches(command) {
+            // Nothing reports when a detached process ends: an hour, like a background command's first lease.
+            hold(name + "-detached", minutes: 60, owner: owner)
         }
     }
 
@@ -237,9 +426,7 @@ if kind == .toolStart {
     if lower.contains("chrome") || lower.contains("browser") || lower.contains("playwright") || lower.contains("preview_") {
         need("browser", owner: owner)
     }
-    if isShell, let command {
-        for app in appsMentioned(in: command) { need(app, owner: owner) }
-    }
+    wakeApps(for: owner)
 }
 
 // Cursor only reports a tool once it has finished (see Integration.swift), so the
@@ -248,13 +435,28 @@ if agent == "cursor", kind == .toolEnd, isShell, let command {
     for app in appsMentioned(in: command) { need(app, owner: owner) }
 }
 
+// Claude Code reads a hook's answer after a tool call; every other agent gets
+// nothing, since some take any output for a decision.
+var answer: String? = nil
+if agent == "claude", kind == .toolEnd, let hint = hintAfterFailure(owner: owner), !isRepeat(hint, lease: name) {
+    answer = hint
+}
+
 switch kind {
 case .stop:
     release(name)
     releaseMatching(prefix: "need-", suffix: "-\(owner)")
+    // Claude Code lists the background work still running when a turn ends,
+    // and ends another turn when it finishes: hold until then, at most 8 hours
+    // after the last turn. Without the list, the lease from the tool call stands.
+    if let tasks = json["background_tasks"] as? [[String: Any]] {
+        let running = tasks.contains { !finished.contains(($0["status"] as? String ?? "running").lowercased()) }
+        if running { hold(name + "-bg", minutes: 480, owner: owner) } else { release(name + "-bg") }
+    }
 case .sessionEnd:
     release(name)
     releaseMatching(prefix: name + "-")
+    releaseMatching(prefix: ".hint-" + name)
     releaseMatching(prefix: "need-", suffix: "-\(owner)")
 case .toolStart:
     // A tool can run long (builds), so hold 2 h while one runs; between tools
@@ -264,4 +466,11 @@ default:
     // Cursor doesn't say when a tool starts, so its hold has to cover a long tool from the start.
     hold(name, minutes: agent == "cursor" ? 120 : 15, owner: owner)
 }
-exit(0)   // prints nothing: no agent takes that for a decision
+
+if let answer {
+    let reply: [String: Any] = ["hookSpecificOutput": ["hookEventName": event, "additionalContext": answer]]
+    if let out = try? JSONSerialization.data(withJSONObject: reply) {
+        FileHandle.standardOutput.write(out + Data("\n".utf8))
+    }
+}
+exit(0)   // otherwise prints nothing: no agent takes that for a decision

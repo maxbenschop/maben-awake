@@ -34,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         MainActor.assumeIsolated {
             Integration.moveFromOldHookName()
+            Integration.addMissingHookEvents()
             FirstRun.run()
             Updater.shared.start()
         }

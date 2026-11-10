@@ -3,6 +3,14 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
+## 1.6 · 10 November 2026
+
+- Work an AI leaves running in the background, such as a build, tests or a server, keeps the Mac awake until it finishes, up to 8 hours after the AI's last turn. The AI no longer has to ask with `awake run`. This needs Claude Code; other agents keep the 30 minutes from before.
+- A frozen app wakes when an AI's command names it in more ways: through System Events, JavaScript for Automation, quitting it, `pkill` or `killall`, its bundle ID or its `.app`. Opening a link wakes the default browser.
+- If a command still fails while apps are frozen, Claude Code is told which apps are frozen. An app the error names is woken straight away, so trying again works.
+- `awake list` shows which apps are frozen.
+- Claude Code hooks from an earlier version get the new failure hook by themselves.
+
 ## 1.5 · 10 November 2026
 
 - Works with nine more agents: Cursor, Gemini CLI, GitHub Copilot (in the terminal and in VS Code), OpenCode, Qwen Code, Droid, Devin, Augment and Kiro. Settings shows the ones set up on your Mac, each with a Connect button.

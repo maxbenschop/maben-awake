@@ -39,6 +39,12 @@ SCENARIOS = [
     ("escaped quotes (double-quoted osascript)", [bash('osascript -e "tell application \\"Dia\\" to get URL"')], False),
     ("open -g -a (flags before -a)", [bash("open -g -a TextEdit")], False),
     ("'docker' only in folder path", [{**bash("ls"), "cwd": "/Users/me/docker-stuff"}], False),
+    # 1.6 (compiled hook only; the shell hook is the fallback):
+    ("background work still running at Stop", [bash("npm run dev", run_in_background=True),
+                                               ev("Stop", background_tasks=[{"id": "b1", "type": "shell", "status": "running"}])], False),
+    ("System Events tell process", [bash("osascript -e 'tell application \"System Events\" to tell process \"Xcode\" to get windows'")], False),
+    ("open a link", [bash("open https://localhost:3000")], False),
+    ("detached server", [bash("npm run dev > /tmp/dev.log 2>&1 &")], False),
 ]
 
 def run(hook, events, folder):

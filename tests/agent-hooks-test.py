@@ -8,10 +8,12 @@ HOOK = sys.argv[1]
 SID = "0198c2f4-7a11-7c3e-9d55-aabbccdd0042"   # leases use the last 8 characters
 OPEN = "osascript -e 'tell application \"Dia\" to get URL' && open -a Spotify"
 
-def call(agent, event, payload, folder, flags=True):
+def call(agent, event, payload, folder, flags=True, frozen=None):
     args = [HOOK] + (["--agent", agent, "--event", event] if flags else [])
     env = {**os.environ, "MABEN_AWAKE_LEASES": folder, "MABEN_AWAKE_HOOK_LOG": folder + "/../agent-hook.log"}
     env.pop("DEVIN_PROJECT_DIR", None)
+    env.pop("MABEN_AWAKE_FROZEN", None)
+    if frozen is not None: env["MABEN_AWAKE_FROZEN"] = frozen
     r = subprocess.run(args, input=json.dumps(payload).encode(), env=env, capture_output=True)
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr.decode()}"
     return r.stdout.decode()
@@ -19,6 +21,7 @@ def call(agent, event, payload, folder, flags=True):
 def leases(folder):
     now = time.time(); found = {}
     for f in sorted(os.listdir(folder)):
+        if f.startswith("."): continue   # the hook's own state (last hint), not a lease
         parts = open(os.path.join(folder, f)).read().split()
         found[f.rsplit("-", 1)[0] if f.startswith("need-") else f] = round((int(parts[0]) - now) / 60)
     return found
@@ -118,6 +121,103 @@ with tempfile.TemporaryDirectory() as d:
     call("opencode", "UserPromptSubmit", {"session_id": a}, d); call("opencode", "UserPromptSubmit", {"session_id": b}, d)
     call("opencode", "Stop", {"session_id": a}, d)
     check("two sessions started together keep separate holds", len(leases(d)) == 1, f"{leases(d)}")
+
+# --- 1.6: the agent no longer has to think about Maben Awake ---------------
+LEASE = f"claude-{SID[:8]}"
+def claude(event, folder, frozen=None, **payload):
+    return call("", "", {"session_id": SID, "hook_event_name": event, **payload}, folder, flags=False, frozen=frozen)
+def bash(command, **extra): return {"tool_name": "Bash", "tool_input": {"command": command, **extra}}
+def needs(folder):   # the app each need- lease asks for (third field of the file)
+    return {" ".join(open(os.path.join(folder, f)).read().split()[2:]) for f in os.listdir(folder) if f.startswith("need-")}
+
+# Background work: Claude Code lists what is still running when a turn ends.
+with tempfile.TemporaryDirectory() as d:
+    claude("PreToolUse", d, **bash("npm run build:watch", run_in_background=True))
+    check("background command: 30 min hold while the turn runs", leases(d).get(LEASE + "-bg") == 30, f"{leases(d)}")
+    claude("Stop", d, background_tasks=[{"id": "b1", "type": "shell", "status": "running", "command": "npm run build:watch"}])
+    check("end of turn with background work running: held up to 8 h", leases(d) == {LEASE + "-bg": 480}, f"{leases(d)}")
+    claude("Stop", d, background_tasks=[{"id": "b1", "type": "shell", "status": "completed"}])
+    check("the turn after it finished releases it", leases(d) == {}, f"{leases(d)}")
+    claude("PreToolUse", d, **bash("sleep 600", run_in_background=True)); claude("Stop", d, background_tasks=[])
+    check("an empty list releases it straight away", leases(d) == {}, f"{leases(d)}")
+    claude("PreToolUse", d, **bash("sleep 600", run_in_background=True)); claude("Stop", d)
+    check("without the list (older Claude Code) the 30 min hold stands", leases(d) == {LEASE + "-bg": 30}, f"{leases(d)}")
+with tempfile.TemporaryDirectory() as d:
+    claude("Stop", d, background_tasks=[{"id": "a1", "type": "agent", "status": "running"}, {"id": "b2", "type": "shell", "status": "killed"}])
+    check("any kind of task still running counts", leases(d) == {LEASE + "-bg": 480}, f"{leases(d)}")
+for command, detached in [("npm run dev > /tmp/dev.log 2>&1 &", True), ("nohup ./server &", True), ("python3 -m http.server 8000 & disown", True),
+                          ("npm test 2>&1 | tail -5", False), ("./a & ./b & wait", False), ("make && make test", False),
+                          ("./server & sleep 2; curl -s localhost:8000; kill %1", False)]:
+    with tempfile.TemporaryDirectory() as d:
+        claude("PreToolUse", d, **bash(command))
+        got = leases(d).get(LEASE + "-detached")
+        check(f"detached: {command!r} " + ("holds 1 h" if detached else "holds nothing extra"), got == (60 if detached else None), f"{leases(d)}")
+
+# Waking: commands are compared with the apps that are frozen right now.
+FROZEN_APPS = "company.thebrowser.dia\tDia\ncom.apple.dt.Xcode\tXcode\nnet.maben.chain\tChain\ncom.apple.Notes\tNotes\n"
+with tempfile.TemporaryDirectory() as scratch:
+    live = os.path.join(scratch, "frozen"); open(live, "w").write(f"pid {os.getpid()}\n" + FROZEN_APPS)
+    stale = os.path.join(scratch, "stale"); open(stale, "w").write("pid 99999999\n" + FROZEN_APPS)
+    for title, command, want, frozen in [
+        ("System Events: tell process", "osascript -e 'tell application \"System Events\" to tell process \"Xcode\" to get name of windows'", {"com.apple.dt.Xcode"}, live),
+        ("JavaScript for Automation", "osascript -l JavaScript -e 'Application(\"Notes\").notes.length'", {"com.apple.Notes"}, live),
+        ("quit app", "osascript -e 'quit app \"Dia\"'", {"company.thebrowser.dia"}, live),
+        ("pkill a frozen app", "pkill -x Chain; sleep 1; pgrep -x Chain", {"net.maben.chain"}, live),
+        ("bundle ID anywhere", "defaults read com.apple.Notes", {"com.apple.Notes"}, live),
+        ("its .app", "open build/Debug/Chain.app", {"net.maben.chain"}, live),
+        ("in quotes in a script", "python3 tools/windows.py --name \"Dia\"", {"company.thebrowser.dia"}, live),
+        ("a word in a path is not a request", "cd ~/Projects/chain && grep -rn Chain Sources/ | head", set(), live),
+        ("lowercase name is not a request", "git commit -m 'fix notes view'", set(), live),
+        ("a list left by an app that is gone is ignored", "defaults read com.apple.Notes", set(), stale),
+        ("tell application still works without a list", "osascript -e 'tell application \"Dia\" to get URL'", {"Dia"}, None),
+        ("open a link: the default browser", "open https://localhost:3000/settings", {"browser"}, None),
+        ("open a page: the default browser", "open -g dist/index.html", {"browser"}, None),
+        ("open -a with a link: only that app", "open -a Safari https://example.com", {"Safari"}, None),
+        ("tell application id", "osascript -e 'tell application id \"com.apple.TextEdit\" to quit'", {"com.apple.TextEdit"}, None),
+        ("open -b", "open -b com.apple.TextEdit notes.txt", {"com.apple.TextEdit"}, None),
+        ("open an app by path", "open \"/Applications/Visual Studio Code.app\"", {"Visual Studio Code"}, None),
+        ("killall with quotes", "killall \"Visual Studio Code\"", {"Visual Studio Code"}, None),
+        ("app \"X\" outside a script is ignored", "echo 'rename app \"Foo\"' >> notes.md", set(), None),
+    ]:
+        with tempfile.TemporaryDirectory() as d:
+            claude("PreToolUse", d, frozen=frozen, **bash(command))
+            check(f"wake: {title}", needs(d) == want, f"{needs(d)} for {command!r}")
+    with tempfile.TemporaryDirectory() as d:
+        claude("PreToolUse", d, frozen=live, tool_name="mcp__computer-use__open_application", tool_input={"app": "Freeform"})
+        claude("PreToolUse", d, frozen=live, tool_name="mcp__notes__search", tool_input={"query": "groceries", "target": "Notes"})
+        claude("PreToolUse", d, frozen=live, tool_name="Read", tool_input={"file_path": "Notes"})
+        check("wake: an MCP tool's app argument, or a value that is a frozen app", needs(d) == {"Freeform", "com.apple.Notes"}, f"{needs(d)}")
+
+    # A failed command while apps are frozen: one line for Claude Code.
+    def hint(out):
+        if not out.strip(): return None
+        reply = json.loads(out)["hookSpecificOutput"]
+        return reply["hookEventName"] + ": " + reply["additionalContext"]
+    with tempfile.TemporaryDirectory() as d:
+        out = claude("PostToolUseFailure", d, frozen=live, **bash("./tools/front-title.sh"),
+                     error="Exit code 1\n12:40: execution error: Notes got an error: AppleEvent timed out. (-1712)")
+        check("failure naming a frozen app: woken, and told to retry", hint(out) == "PostToolUseFailure: Maben Awake: Notes was frozen and is awake now (10 min). Retry the command."
+              and needs(d) == {"com.apple.Notes"}, f"{out!r} {needs(d)}")
+        out = claude("PostToolUseFailure", d, frozen=live, **bash("./tools/check-ui.sh"), error="Exit code 1\nERROR: no response (timeout)")
+        check("timeout naming no app: told which apps are frozen", hint(out) == "PostToolUseFailure: Maben Awake: these apps are frozen: Dia, Xcode, Chain, Notes. If the command needed one, run `awake need \"<App>\"` and retry.", f"{out!r}")
+        out = claude("PostToolUseFailure", d, frozen=live, **bash("./tools/check-ui.sh"), error="Exit code 1\nERROR: no response (timeout)")
+        check("the same hint again within 10 min: nothing", out == "", f"{out!r}")
+        out = claude("PostToolUseFailure", d, frozen=live, **bash("make"), error="Exit code 2\nmake: *** [all] Error 2 (see Release Notes)")
+        check("an ordinary failure: nothing", out == "", f"{out!r}")
+        out = claude("PostToolUse", d, frozen=live, **bash("./tools/try-ui.sh"), tool_response={"stdout": "error: Xcode got an error: AppleEvent timed out. (-1712)", "stderr": ""})
+        check("a script that swallowed the timeout: still caught", hint(out) == "PostToolUse: Maben Awake: Xcode was frozen and is awake now (10 min). Retry the command.", f"{out!r}")
+        out = claude("PostToolUse", d, frozen=live, **bash("npm test"), tool_response={"stdout": "3 passed, request timed out once", "stderr": ""})
+        check("a successful command: nothing", out == "", f"{out!r}")
+        claude("SessionEnd", d)
+        check("session end forgets the last hint", not [f for f in os.listdir(d) if f.startswith(".hint")], f"{os.listdir(d)}")
+    with tempfile.TemporaryDirectory() as d:
+        out = claude("PostToolUseFailure", d, **bash("osascript -e 'tell application \"Dia\" to get URL'"), error="AppleEvent timed out. (-1712)")
+        check("nothing frozen (lid open): nothing", out == "", f"{out!r}")
+    for agent, event in [("codex", "PostToolUse"), ("gemini", "AfterTool"), ("cursor", "postToolUse"), ("copilot", "PostToolUse")]:
+        with tempfile.TemporaryDirectory() as d:
+            out = call(agent, event, {"session_id": SID, "hook_event_name": event, "tool_name": "shell", "tool_input": {"command": "./x.sh"},
+                                      "error": "Dia got an error: AppleEvent timed out. (-1712)"}, d, frozen=live)
+            check(f"{agent}: never prints a hint", out == "", f"{out!r}")
 
 print(f"\n{failed} failed" if failed else "\nALL PASSED")
 sys.exit(1 if failed else 0)
