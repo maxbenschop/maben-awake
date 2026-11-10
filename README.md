@@ -29,7 +29,7 @@ Needs Xcode command line tools (`xcode-select --install`). macOS 13+.
 
 The app updates itself from GitHub Releases (`Sources/Sleepwalker/Updater.swift`):
 
-1. At start and every 6 hours it asks the GitHub API for the latest release (never drafts or pre-releases).
+1. At start, every 6 hours, and after waking (if it has been 6 hours) it asks the GitHub API for the latest release (never drafts or pre-releases).
 2. If its tag `vX.Y.Z` is newer, the menu bar icon turns green and the menu and Settings › General show an
    Update button. With "Install updates automatically" on (default), it installs by itself once the lid is
    open and no agent is working.
@@ -55,7 +55,7 @@ For a new version: bump `CFBundleShortVersionString` in `Info.plist`, add a `## 
 `CHANGELOG.md`, merge to `main`, run `./release.sh`, then `./publish.sh`. That tags the commit, creates the GitHub
 release (notes from `CHANGELOG.md`), and rebuilds and deploys awake.maben.gg (version, checksums, changelog page).
 
-A downloaded copy sets itself up: on first start from Applications it opens Settings → AI, where the Claude
+A downloaded copy sets itself up: on first start from Applications it opens Settings → Agents, where the Claude
 Code hooks and the `awake` command are installed, updated or removed with a button (`Integration.swift`,
 tested by `tests/integration-test.sh` against a temporary home folder). Opened straight from Downloads it asks
 to be moved to Applications first (`FirstRun.swift`).
@@ -101,7 +101,7 @@ with live countdowns, and every running app with its mode.
 ## Codex
 
 Codex uses the same hook program with `--agent codex`, from `~/.codex/hooks.json`
-(Settings → AI → Codex hooks, or `./build.sh install` when `~/.codex` exists).
+(Settings → Agents → Codex hooks, or `./build.sh install` when `~/.codex` exists).
 Codex asks you to review new hooks once: run `/hooks` in Codex and trust them.
 Its requests show as *Codex is working* in the menu.
 
