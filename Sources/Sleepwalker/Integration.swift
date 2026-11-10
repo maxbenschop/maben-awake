@@ -1,7 +1,7 @@
 import AppKit
 
 /// The two things that connect AI tools to the app: the Claude Code hooks and
-/// the `awake` command. Settings → AI shows whether they are in place and
+/// the `awake` command. Settings → Agents shows whether they are in place and
 /// installs, updates or removes them. (`build.sh install` does the same for a
 /// development build.)
 enum Integration {

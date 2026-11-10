@@ -3,6 +3,10 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
+## 1.4.1 · 10 November 2026
+
+- Checks for updates when the Mac wakes, if the last check was more than 6 hours ago, so a Mac that sleeps most of the day still updates promptly.
+
 ## 1.4 · 10 November 2026
 
 - Updates itself from GitHub. Settings has an Update button, and new versions can install automatically while the lid is open and no agent is working.

@@ -7,8 +7,8 @@ import Security
 /// How it works:
 /// 1. Check: GET the repository's latest release from the GitHub API (drafts and
 ///    pre-releases are never "latest"). Its tag `vX.Y.Z` is the version and its
-///    text is shown as the release notes. Once at start, then every 6 hours, or
-///    when you press Check now. This is the only network request the app makes.
+///    text is shown as the release notes. Once at start, then every 6 hours, after
+///    waking if the last check is over 6 hours old, or when you press Check now. This is the only network request the app makes.
 /// 2. Download `Maben-Awake.zip` from that release to a temporary folder.
 /// 3. Verify before touching anything: the app inside must be signed with the
 ///    Developer ID of team NJTYRVLSA8 with this bundle ID, notarized by Apple
@@ -51,6 +51,10 @@ final class Updater: ObservableObject {
 
     private let defaults = UserDefaults.standard
     private var timer: Timer?
+    /// When GitHub last answered. The timer doesn't run while the Mac sleeps, so a Mac that
+    /// sleeps most of the day checks again when it wakes instead of waiting another 6 hours.
+    private var lastCheck: Date?
+    private var wakeObserver: NSObjectProtocol?
     private var downloadObservation: NSKeyValueObservation?
 
     var currentVersion: String { Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0" }
@@ -75,6 +79,19 @@ final class Updater: ObservableObject {
         schedule()
         if autoCheck {
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.check(userInitiated: false) }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.checkAfterWake() }
+        }
+    }
+
+    /// After waking, give the network half a minute, then check if the last answer is over 6 hours old.
+    private func checkAfterWake() {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 30) { [weak self] in
+            guard let self, self.autoCheck else { return }
+            if let lastCheck = self.lastCheck, Date().timeIntervalSince(lastCheck) < 6 * 3600 { return }
+            self.check(userInitiated: false)
         }
     }
 
@@ -106,10 +123,12 @@ final class Updater: ObservableObject {
                 } else if status != 200 || release == nil {
                     self.fail(userInitiated ? "GitHub didn't return a release (HTTP \(status))." : nil)
                 } else if let release, Self.isNewer(release.version, than: self.currentVersion) {
+                    self.lastCheck = Date()
                     self.state = .available(release)
                     EventLog.write("update available: \(release.version)")
                     if self.autoInstall { self.installWhenQuiet() }
                 } else {
+                    self.lastCheck = Date()
                     self.state = .upToDate(checked: Date())
                 }
             }
