@@ -23,6 +23,7 @@
 // Lease files: ~/Library/Application Support/MabenAwake/leases/<name>
 // containing "<expiry unix time> <owner pid> [app]".
 import Foundation
+import CoreServices
 
 let env = ProcessInfo.processInfo.environment
 let home = FileManager.default.homeDirectoryForCurrentUser.path
@@ -190,11 +191,20 @@ func contains(_ re: NSRegularExpression, _ text: String) -> Bool {
 /// A value in quotes: "X", \"X\" (inside a double-quoted string) or 'X'.
 let quoted = #"(?:\\?"([^"\\]+)\\?"|'([^']+)')"#
 
+/// How 1.5 recognised the apps a command uses. These wake the app whether or
+/// not it is frozen (an app the AI launches this way is quit again by the
+/// app's clean-up when the AI is done, with the lid closed).
 let regexes: [NSRegularExpression] = [
     // Quotes may be escaped: osascript -e "tell application \"Dia\" to …"
     #"tell (?:application|app) \\?"([^"\\]+)\\?""#,          // osascript -e 'tell application "Dia" …'
     #"\bopen(?: -[a-zA-Z]+)* -a \\?"([^"\\]+)\\?""#,         // open -a "Visual Studio Code", open -g -a "X"
     #"\bopen(?: -[a-zA-Z]+)* -a ([A-Za-z0-9.]+)"#,          // open -a Dia, open -g -a TextEdit
+].map { regex($0) }
+
+/// Added in 1.6. These only wake an app that is frozen right now: `open X.app`
+/// and `pkill` are mostly an AI relaunching a build it is working on, which
+/// must not become a request the clean-up would later quit.
+let moreRegexes: [NSRegularExpression] = [
     #"\bopen(?: -[a-zA-Z]+)* -b ([A-Za-z0-9.-]+)"#,         // open -b com.apple.TextEdit
     #"tell (?:application|app) id \\?"([^"\\]+)\\?""#,       // tell application id "com.apple.Notes"
     // open "/Applications/Visual Studio Code.app", open -n build/Chain.app
@@ -236,12 +246,20 @@ let agentDesktopRegexes: [NSRegularExpression] = [
 
 let notApps: Set<String> = ["", "System Events", "Finder"]
 
+/// The apps a command uses, as 1.5 found them.
 func appsMentioned(in command: String) -> Set<String> {
-    var apps = captures(regexes, in: command).union(appsKilled(in: command))
-    if contains(scripting, command) { apps.formUnion(captures(scriptRegexes, in: command)) }
-    if contains(opensBrowser, command) { apps.insert("browser") }
+    var apps = captures(regexes, in: command)
     if command.contains("agent-desktop") { apps.formUnion(captures(agentDesktopRegexes, in: command)) }
     if command.range(of: #"\b(docker|kubectl)\b"#, options: .regularExpression) != nil { apps.insert("docker") }
+    return apps.subtracting(notApps)
+}
+
+/// The apps a command uses that only the 1.6 patterns find (still to be
+/// checked against the frozen apps).
+func moreAppsMentioned(in command: String) -> Set<String> {
+    var apps = captures(moreRegexes, in: command).union(appsKilled(in: command))
+    if contains(scripting, command) { apps.formUnion(captures(scriptRegexes, in: command)) }
+    if contains(opensBrowser, command) { apps.insert("browser") }
     return apps.subtracting(notApps)
 }
 
@@ -264,6 +282,25 @@ let frozen: [FrozenApp] = {
         return FrozenApp(bundle: parts[0], name: parts[1])
     }
 }()
+
+/// The frozen app a lease's app string means, matched the way the app does
+/// (`Model.matches`): bundle ID, name, start of the name, or end of the bundle ID.
+func frozenApp(_ want: String) -> FrozenApp? {
+    let w = want.lowercased()
+    if w == "browser" { return defaultBrowser.flatMap { id in frozen.first { $0.bundle.lowercased() == id } } }
+    return frozen.first { app in
+        let id = app.bundle.lowercased(), n = app.name.lowercased()
+        return w == id || w == n || n.hasPrefix(w) || id.hasSuffix("." + w)
+    }
+}
+
+/// Bundle ID of the default web browser (only looked up when a command opens a link).
+var defaultBrowser: String? {
+    if let id = env["MABEN_AWAKE_BROWSER"] { return id.lowercased() }
+    guard let url = LSCopyDefaultApplicationURLForURL(URL(string: "https://example.com")! as CFURL, .all, nil)?.takeRetainedValue() as URL?
+    else { return nil }
+    return Bundle(url: url)?.bundleIdentifier?.lowercased()
+}
 
 /// Frozen apps that `text` names. Strict (a command about to run): the name or
 /// bundle ID where a command addresses an app (`-a`, `-b`, `--app`, `process`,
@@ -308,18 +345,18 @@ func strings(in value: Any, depth: Int = 0) -> [(key: String?, value: String)] {
     return []
 }
 
-/// Apps that an MCP or computer-use tool call names in its arguments: a field
-/// called `app`, `apps`, `bundle_id`…, or a value that is a frozen app's bundle
-/// ID. (Not a value that is just a name: a browser tool's `"action": "screenshot"`
+/// Frozen apps that an MCP or computer-use tool call names in its arguments: in
+/// a field called `app`, `apps`, `bundle_id`…, or as a value that is a frozen
+/// app's bundle ID. (Not a value that is just a name: a browser tool's `"action": "screenshot"`
 /// isn't Apple's Screenshot app.)
 func appsInArguments() -> Set<String> {
     let appKeys: Set<String> = ["app", "apps", "app_name", "appname", "application", "applications", "bundle_id", "bundleid"]
     var apps = Set<String>()
     for (key, value) in strings(in: input) {
-        if let key, appKeys.contains(key.lowercased()) { apps.insert(value) }
+        if let key, appKeys.contains(key.lowercased()), let app = frozenApp(value) { apps.insert(app.bundle) }
         for app in frozen where value.caseInsensitiveCompare(app.bundle) == .orderedSame { apps.insert(app.bundle) }
     }
-    return apps.subtracting(notApps)
+    return apps
 }
 
 // MARK: Background work
@@ -364,7 +401,11 @@ let strongSymptom = regex(#"-1712|-609|AppleEvent timed out|Connection is invali
 let talksToApps = regex(#"osascript|(?:^|[;&|(`$]\s*|\n\s*|\bthen\s+|\bdo\s+)open\s|agent-desktop|lsappinfo|screencapture|System Events|Application\(|cliclick|peekaboo|shortcuts run|\bpkill\b|\bkillall\b"#)
 
 /// One line for the agent when a tool call failed while apps were frozen, or
-/// nil. An app the error names is woken here, so a retry just works.
+/// nil. Only an app the failure really names is woken: its name as a word with
+/// its own capitals in the error (AppleScript says "Notes got an error"), its
+/// bundle ID, or the command addressing it. "Retry" is said outright only for an
+/// error a frozen app causes (a timed-out Apple event); after a plain timeout
+/// the agent is told to retry if the command needed that app.
 func hintAfterFailure(owner: pid_t) -> String? {
     guard !frozen.isEmpty else { return nil }
     let failed = event.lowercased() == "posttoolusefailure"
@@ -373,14 +414,20 @@ func hintAfterFailure(owner: pid_t) -> String? {
         ?? [response?["stdout"], response?["stderr"]].compactMap { $0 as? String }.joined(separator: "\n")
     let text = String(output.prefix(20_000))
     let call = command ?? strings(in: input).map(\.value).joined(separator: " ")
-    let relevant = failed ? (contains(symptom, text) || contains(talksToApps, call)) : contains(strongSymptom, text)
-    guard relevant else { return nil }
+    let strong = contains(strongSymptom, text), hang = contains(symptom, text)
+    guard failed ? (hang || contains(talksToApps, call)) : strong else { return nil }
 
-    let named = frozenApps(namedIn: call + "\n" + text, loose: true)
-    if !named.isEmpty {
+    let named = frozen.filter { app in
+        if app.bundle.contains("."), contains(regex(#"(?<![\w.-])\#(NSRegularExpression.escapedPattern(for: app.bundle))(?![\w-])"#, .caseInsensitive), text) { return true }
+        guard app.name.count >= 2, !notApps.contains(app.name), text.contains(app.name) else { return false }
+        return contains(regex(#"(?<![\w-])\#(NSRegularExpression.escapedPattern(for: app.name))(?![\w-])"#), text)
+    } + frozenApps(namedIn: call, loose: false).filter { app in !text.contains(app.name) }
+    if hang || strong, !named.isEmpty {
         for app in named { need(app.bundle, owner: owner) }
         let names = named.map(\.name).joined(separator: ", ")
-        return "Maben Awake: \(names) \(named.count == 1 ? "was" : "were") frozen and \(named.count == 1 ? "is" : "are") awake now (10 min). Retry the command."
+        let one = named.count == 1
+        return "Maben Awake: \(names) \(one ? "was" : "were") frozen and \(one ? "is" : "are") awake now (10 min). "
+            + (strong ? "Retry the command." : "If the command needed \(one ? "it" : "them"), retry it.")
     }
     let names = frozen.prefix(8).map(\.name).joined(separator: ", ") + (frozen.count > 8 ? " and \(frozen.count - 8) more" : "")
     return "Maben Awake: these apps are frozen: \(names). If the command needed one, run `awake need \"<App>\"` and retry."
@@ -428,7 +475,8 @@ func wakeApps(for owner: pid_t) {
         // mostly code being written to a file, unless they go to osascript.
         let spoken = command.contains("osascript") ? command : withoutHeredocs(command)
         let named = contains(talksToApps, spoken) ? frozenApps(namedIn: spoken, loose: false) : []
-        apps = appsMentioned(in: command).subtracting(named.map(\.name)).union(named.map(\.bundle))
+        let more = moreAppsMentioned(in: command).compactMap { want in want == "browser" ? (frozenApp(want) != nil ? want : nil) : frozenApp(want)?.bundle }
+        apps = appsMentioned(in: command).subtracting(named.map(\.name)).union(named.map(\.bundle)).union(more)
     } else if tool.lowercased().contains("mcp") || tool.lowercased().contains("computer") {
         apps = appsInArguments()
     }

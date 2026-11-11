@@ -42,8 +42,9 @@ SCENARIOS = [
     # 1.6 (compiled hook only; the shell hook is the fallback):
     ("background work still running at Stop", [bash("npm run dev", run_in_background=True),
                                                ev("Stop", background_tasks=[{"id": "b1", "type": "shell", "status": "running"}])], False),
-    ("System Events tell process", [bash("osascript -e 'tell application \"System Events\" to tell process \"Xcode\" to get windows'")], False),
-    ("open a link", [bash("open https://localhost:3000")], False),
+    # Without a list of frozen apps the 1.6 patterns wake nothing, so these match the shell hook:
+    ("System Events tell process, nothing frozen", [bash("osascript -e 'tell application \"System Events\" to tell process \"Xcode\" to get windows'")], True),
+    ("open a link, nothing frozen", [bash("open https://localhost:3000")], True),
     ("detached server", [bash("npm run dev > /tmp/dev.log 2>&1 &")], False),
 ]
 

@@ -57,6 +57,9 @@ final class AICleanup {
             // The app that was open when the AI asked has since quit and this is a
             // new instance (e.g. it was shutting down): the AI launched this one.
             let relaunched = session.pidBefore.map { $0 != app.processIdentifier } ?? false
+            // A build the AI is working on (outside /Applications) is never quit:
+            // relaunching it isn't a request to clean up after.
+            if Policy.isDevBuild(app.bundleURL) { continue }
             if session.launchedByAI || relaunched {
                 keepAwake.insert(app.processIdentifier)
                 app.terminate()

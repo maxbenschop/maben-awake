@@ -100,7 +100,7 @@ import glob, json, os, re, sys
 hook = sys.argv[1]
 cmd = {"type": "command", "command": f'"{hook}"'}
 old_hooks = ("AwakeKeeper.app", "Sleepwalker.app/", "/sleepwalker-hook")
-events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"]
+events = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"]
 main = os.path.expanduser("~/.claude/settings.json")
 paths = [main] + sorted(p for p in glob.glob(os.path.expanduser("~/.claude*/settings.json")) if p != main)
 for path in paths:
@@ -116,7 +116,7 @@ for path in paths:
             g["hooks"] = [h for h in g.get("hooks", []) if not any(o in h.get("command", "") for o in old_hooks)]
         lst[:] = [g for g in lst if g.get("hooks")]
         if not any(h.get("command") == cmd["command"] for g in lst for h in g.get("hooks", [])):
-            lst.append({"matcher": "", "hooks": [cmd]} if event.endswith("ToolUse") else {"hooks": [cmd]})
+            lst.append({"matcher": "", "hooks": [cmd]} if "ToolUse" in event else {"hooks": [cmd]})
     os.makedirs(os.path.dirname(path), exist_ok=True)
     json.dump(s, open(path, "w"), indent=2)
     print("Claude Code hooks set in", path)

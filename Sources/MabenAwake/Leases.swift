@@ -17,8 +17,10 @@ struct Lease: Identifiable, Hashable {
     var remaining: TimeInterval { expires.timeIntervalSinceNow }
 
     /// An AI turn or `awake run` in progress, as opposed to a scheduled wake-up,
-    /// cron, or an app request.
-    var isWork: Bool { app == nil && !name.hasSuffix("-wakeup") && !name.hasSuffix("-cron") }
+    /// cron, an app request, or work an agent left running in the background
+    /// (`-bg`, `-detached`): those keep the Mac awake for hours, but nobody is
+    /// working, so apps stay frozen and the menu doesn't say an AI is working.
+    var isWork: Bool { app == nil && !["-wakeup", "-cron", "-bg", "-detached"].contains { name.hasSuffix($0) } }
 }
 
 enum LeaseStore {

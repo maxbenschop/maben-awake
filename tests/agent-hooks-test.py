@@ -14,6 +14,7 @@ def call(agent, event, payload, folder, flags=True, frozen=None):
     env.pop("DEVIN_PROJECT_DIR", None)
     env.pop("MABEN_AWAKE_FROZEN", None)
     if frozen is not None: env["MABEN_AWAKE_FROZEN"] = frozen
+    env["MABEN_AWAKE_BROWSER"] = "company.thebrowser.dia"   # the default browser, whatever this Mac uses
     r = subprocess.run(args, input=json.dumps(payload).encode(), env=env, capture_output=True)
     assert r.returncode == 0, f"exit {r.returncode}: {r.stderr.decode()}"
     return r.stdout.decode()
@@ -159,7 +160,8 @@ for command, detached in [("npm run dev > /tmp/dev.log 2>&1 &", True), ("nohup .
         got = leases(d).get(LEASE + "-detached")
         check(f"detached: {command!r} " + ("holds 1 h" if detached else "holds nothing extra"), got == (60 if detached else None), f"{leases(d)}")
 
-# Waking: commands are compared with the apps that are frozen right now.
+# Waking: commands are compared with the apps that are frozen right now. What
+# 1.5 recognised wakes an app either way; what 1.6 added only wakes a frozen app.
 FROZEN_APPS = "company.thebrowser.dia\tDia\ncom.apple.dt.Xcode\tXcode\nnet.maben.chain\tChain\ncom.apple.Notes\tNotes\n"
 with tempfile.TemporaryDirectory() as scratch:
     live = os.path.join(scratch, "frozen"); open(live, "w").write(f"pid {os.getpid()}\n" + FROZEN_APPS)
@@ -184,14 +186,16 @@ with tempfile.TemporaryDirectory() as scratch:
         ("a word in a path is not a request", "cd ~/Projects/chain && grep -rn Chain Sources/ | head", set(), live),
         ("lowercase name is not a request", "git commit -m 'fix notes view'", set(), live),
         ("a list left by an app that is gone is ignored", "defaults read com.apple.Notes", set(), stale),
-        ("tell application still works without a list", "osascript -e 'tell application \"Dia\" to get URL'", {"Dia"}, None),
-        ("open a link: the default browser", "open https://localhost:3000/settings", {"browser"}, None),
-        ("open a page: the default browser", "open -g dist/index.html", {"browser"}, None),
-        ("open -a with a link: only that app", "open -a Safari https://example.com", {"Safari"}, None),
-        ("tell application id", "osascript -e 'tell application id \"com.apple.TextEdit\" to quit'", {"com.apple.TextEdit"}, None),
-        ("open -b", "open -b com.apple.TextEdit notes.txt", {"com.apple.TextEdit"}, None),
-        ("open an app by path", "open \"/Applications/Visual Studio Code.app\"", {"Visual Studio Code"}, None),
-        ("killall with quotes", "killall \"Visual Studio Code\"", {"Visual Studio Code"}, None),
+        ("tell application, as in 1.5, also when not frozen", "osascript -e 'tell application \"Dia\" to get URL'", {"Dia"}, None),
+        ("open -a, as in 1.5, also when not frozen", "open -a Safari https://example.com", {"Safari"}, None),
+        ("open a link: the default browser when it is frozen", "open https://localhost:3000/settings", {"browser"}, live),
+        ("open a page: the default browser when it is frozen", "open -g dist/index.html", {"browser"}, live),
+        ("open a link: nothing when the browser isn't frozen", "open https://localhost:3000/settings", set(), None),
+        ("tell application id of an app that isn't frozen: nothing", "osascript -e 'tell application id \"com.apple.TextEdit\" to quit'", set(), live),
+        ("open -b of an app that isn't frozen: nothing", "open -b com.apple.TextEdit notes.txt", set(), live),
+        ("relaunching a build that isn't frozen: nothing", "pkill -x Chain; sleep 1; open build/Debug/Chain.app", set(), None),
+        ("killall of an app that isn't frozen: nothing", "killall \"Visual Studio Code\"", set(), live),
+        ("tell process of an app that isn't frozen: nothing", "osascript -e 'tell application \"System Events\" to tell process \"Freeform\" to get windows'", set(), live),
         ("app \"X\" outside a script is ignored", "echo 'rename app \"Foo\"' >> notes.md", set(), None),
     ]:
         with tempfile.TemporaryDirectory() as d:
@@ -199,10 +203,11 @@ with tempfile.TemporaryDirectory() as scratch:
             check(f"wake: {title}", needs(d) == want, f"{needs(d)} for {command!r}")
     with tempfile.TemporaryDirectory() as d:
         claude("PreToolUse", d, frozen=live, tool_name="mcp__computer-use__open_application", tool_input={"app": "Freeform"})
+        claude("PreToolUse", d, frozen=live, tool_name="mcp__computer-use__open_application", tool_input={"app": "Dia"})
         claude("PreToolUse", d, frozen=live, tool_name="mcp__notes__search", tool_input={"query": "groceries", "target": "com.apple.Notes"})
         claude("PreToolUse", d, frozen=live, tool_name="mcp__claude-in-chrome__computer", tool_input={"action": "Notes"})
         claude("PreToolUse", d, frozen=live, tool_name="Read", tool_input={"file_path": "Notes"})
-        check("wake: an MCP tool's app argument, or a frozen app's bundle ID", needs(d) == {"Freeform", "com.apple.Notes", "browser"}, f"{needs(d)}")
+        check("wake: an MCP tool's frozen app argument or bundle ID (not an app that isn't frozen)", needs(d) == {"company.thebrowser.dia", "com.apple.Notes", "browser"}, f"{needs(d)}")
 
     # A failed command while apps are frozen: one line for Claude Code.
     def hint(out):
@@ -226,6 +231,20 @@ with tempfile.TemporaryDirectory() as scratch:
         check("a successful command: nothing", out == "", f"{out!r}")
         claude("SessionEnd", d)
         check("session end forgets the last hint", not [f for f in os.listdir(d) if f.startswith(".hint")], f"{os.listdir(d)}")
+    with tempfile.TemporaryDirectory() as d:
+        out = claude("PostToolUseFailure", d, frozen=live, **bash("./tools/front-title.sh"), error="Exit code 1\nerror: Chain did not answer (timed out after 15 s)")
+        check("a plain timeout naming a frozen app: woken, retry if it was needed", hint(out) == "PostToolUseFailure: Maben Awake: Chain was frozen and is awake now (10 min). If the command needed it, retry it."
+              and needs(d) == {"net.maben.chain"}, f"{out!r} {needs(d)}")
+    # Words that happen to be a frozen app's name must not wake it or ask for a retry.
+    common = os.path.join(scratch, "common"); open(common, "w").write(f"pid {os.getpid()}\n" + "com.apple.iWork.Pages\tPages\ncom.apple.Preview\tPreview\ncom.apple.Home\tHome\n")
+    for title, command, error in [
+        ("a test timeout in pages/", "npm test", "Exit code 1\nError: Timeout of 5000ms exceeded in pages/index.test.ts"),
+        ("a missing file under home/", "open dist/report.pdf", "Exit code 1\nThe file /Users/me/home/dist/report.pdf does not exist."),
+        ("a timed-out URL ending in preview", "curl -s --max-time 5 https://example.com/preview", "Exit code 28\ncurl: (28) Operation timed out"),
+    ]:
+        with tempfile.TemporaryDirectory() as d:
+            out = claude("PostToolUseFailure", d, frozen=common, **bash(command), error=error)
+            check(f"no false wake: {title}", needs(d) == set() and "was frozen" not in (hint(out) or ""), f"{out!r} {needs(d)}")
     with tempfile.TemporaryDirectory() as d:
         out = claude("PostToolUseFailure", d, **bash("osascript -e 'tell application \"Dia\" to get URL'"), error="AppleEvent timed out. (-1712)")
         check("nothing frozen (lid open): nothing", out == "", f"{out!r}")
