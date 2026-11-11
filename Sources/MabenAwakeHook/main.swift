@@ -207,9 +207,22 @@ let regexes: [NSRegularExpression] = [
 let moreRegexes: [NSRegularExpression] = [
     #"\bopen(?: -[a-zA-Z]+)* -b ([A-Za-z0-9.-]+)"#,         // open -b com.apple.TextEdit
     #"tell (?:application|app) id \\?"([^"\\]+)\\?""#,       // tell application id "com.apple.Notes"
-    // open "/Applications/Visual Studio Code.app", open -n build/Chain.app
-    #"\bopen(?: -[a-zA-Z]+)* (?:\\?"(?:[^"\\]*/)?([^"/\\]+)\.app/?\\?"|'(?:[^']*/)?([^'/]+)\.app/?'|(?:[^\s"';&|]*/)?([^\s"'/;&|]+)\.app\b)"#,
 ].map { regex($0) }
+
+/// `open "/Applications/Visual Studio Code.app"`, `open -n build/Chain.app`: the path.
+let openAppRegex = regex(#"\bopen(?: -[a-zA-Z-]+(?: [A-Z_]+=\S+)?)* (?:\\?"([^"\\]*\.app)/?\\?"|'([^']*\.app)/?'|([^\s"';&|]*\.app)\b)"#)
+
+/// The app a path to an `.app` names, unless the path is a build outside the
+/// Applications folders: relaunching a build doesn't need the installed copy
+/// of the same app awake. A bare `Chain.app` could be either and counts.
+func installedApp(atPath path: String) -> String? {
+    guard let r = path.range(of: #"([^/]+)\.app$"#, options: .regularExpression) ?? path.range(of: #"([^/]+)\.app(?=/)"#, options: .regularExpression)
+    else { return nil }
+    let before = path[..<r.lowerBound]
+    let installed = before.isEmpty || ["/Applications/", "~/Applications/", "$HOME/Applications/", "/System/Applications/"].contains { before.hasSuffix($0) && !before.dropLast($0.count).contains("/") }
+        || before.hasPrefix(home + "/Applications/")
+    return installed ? String(path[r].dropLast(4)) : nil
+}
 
 /// An app that quits cleanly on SIGTERM (Chromium and Electron apps among them)
 /// can't while it is frozen, so a kill wakes it: pkill -x Chain, killall "Visual Studio Code",
@@ -218,7 +231,7 @@ let moreRegexes: [NSRegularExpression] = [
 let killRegex = regex(#"\b(?:pkill|killall)(?: +-[a-zA-Z0-9]+)* +(?:\#(quoted)|([^\s"';&|]+))"#)
 func appsKilled(in command: String) -> Set<String> {
     Set(captures([killRegex], in: command).compactMap { target in
-        if let r = target.range(of: #"([^/]+)\.app\b"#, options: .regularExpression) { return String(target[r].dropLast(4)) }
+        if target.contains(".app") { return installedApp(atPath: String(target[..<(target.range(of: ".app")!.upperBound)])) }
         let isName = target.first?.isUppercase == true && target.range(of: #"^[A-Za-z0-9][A-Za-z0-9 ._()-]*$"#, options: .regularExpression) != nil
         return isName ? target : nil
     })
@@ -258,6 +271,7 @@ func appsMentioned(in command: String) -> Set<String> {
 /// checked against the frozen apps).
 func moreAppsMentioned(in command: String) -> Set<String> {
     var apps = captures(moreRegexes, in: command).union(appsKilled(in: command))
+        .union(captures([openAppRegex], in: command).compactMap(installedApp(atPath:)))
     if contains(scripting, command) { apps.formUnion(captures(scriptRegexes, in: command)) }
     if contains(opensBrowser, command) { apps.insert("browser") }
     return apps.subtracting(notApps)
@@ -325,7 +339,7 @@ func frozenApps(namedIn text: String, loose: Bool) -> [FrozenApp] {
         let name = NSRegularExpression.escapedPattern(for: app.name)
         if loose { return contains(regex(#"(?<![\w-])\#(name)(?![\w-])"#, .caseInsensitive), text) }
         let addressed = #"(?:-a|--app|--app=|\bprocess|\bpkill(?: +-\w+)*|\bkillall(?: +-\w+)*) +\\?["']?\#(name)(?![\w-])"#
-        let bundle = #"\b(?:open|pkill|killall)\b[^\n;&|]*?(?<![\w-])\#(name)\.app\b"#
+        let bundle = #"\b(?:open|pkill|killall)\b[^\n;&|]*?(?:(?<![\w/-])|(?<![^\s"'])(?:~|\$HOME|/System)?/Applications/)\#(name)\.app\b"#
         let quoted = #"(?:\\?"\#(name)\\?"|'\#(name)')"#
         return contains(regex(addressed), text) || contains(regex(bundle), text) || (script && contains(regex(quoted), text))
     }
@@ -472,10 +486,10 @@ func wakeApps(for owner: pid_t) {
     var apps = Set<String>()
     if isShell, let command {
         // A frozen app found by both goes by its bundle ID only. Heredocs are
-        // mostly code being written to a file, unless they go to osascript.
-        let spoken = command.contains("osascript") ? command : withoutHeredocs(command)
+        // mostly code being written to a file, unless they are fed to osascript.
+        let spoken = command.range(of: #"osascript[^\n;&|]*<<"#, options: .regularExpression) != nil ? command : withoutHeredocs(command)
         let named = contains(talksToApps, spoken) ? frozenApps(namedIn: spoken, loose: false) : []
-        let more = moreAppsMentioned(in: command).compactMap { want in want == "browser" ? (frozenApp(want) != nil ? want : nil) : frozenApp(want)?.bundle }
+        let more = moreAppsMentioned(in: spoken).compactMap { want in want == "browser" ? (frozenApp(want) != nil ? want : nil) : frozenApp(want)?.bundle }
         apps = appsMentioned(in: command).subtracting(named.map(\.name)).union(named.map(\.bundle)).union(more)
     } else if tool.lowercased().contains("mcp") || tool.lowercased().contains("computer") {
         apps = appsInArguments()
