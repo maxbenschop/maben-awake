@@ -31,9 +31,10 @@ let written = try Integration.installHooks()
 check("writes main and the folder that had hooks, not the plain one", written.map(\.lastPathComponent).count == 2
       && !FileManager.default.fileExists(atPath: a[1] + "/.claude-plain/settings.json.before-maben-awake"))
 check("status installed", Integration.hooksStatus == .installed)
-for event in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"] {
+for event in ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"] {
     check("main has exactly one own hook for \(event)", commands(".claude/settings.json", event).filter { $0.contains("maben-awake-hook") } == [mine])
 }
+check("the failure hook matches every tool", ((json(".claude/settings.json")["hooks"] as? [String: Any])?["PostToolUseFailure"] as? [[String: Any]])?.last?["matcher"] as? String == "")
 check("old app path is gone", !commands(".claude/settings.json", "PreToolUse").contains { $0.contains("Sleepwalker.app") })
 check("other hook kept", commands(".claude/settings.json", "PreToolUse").contains("echo other"))
 check("other settings kept", json(".claude/settings.json")["model"] as? String == "opus" && (json(".claude/settings.json")["permissions"] as? [String: Any]) != nil)
@@ -42,6 +43,19 @@ check("backup made once", FileManager.default.fileExists(atPath: a[1] + "/.claud
 try Integration.installHooks()
 check("installing twice doesn't duplicate", commands(".claude/settings.json", "Stop").filter { $0 == mine }.count == 1)
 check("second folder moved to this copy", commands(".claude-work/settings.json", "Stop") == [mine])
+
+// Hooks installed by 1.5 have no PostToolUseFailure: outdated, and updating adds it.
+let mainSettings = Integration.home.appendingPathComponent(".claude/settings.json")
+var old = json(".claude/settings.json"); var oldHooks = old["hooks"] as! [String: Any]
+oldHooks.removeValue(forKey: "PostToolUseFailure"); old["hooks"] = oldHooks
+try JSONSerialization.data(withJSONObject: old).write(to: mainSettings)
+check("an install without the failure hook is outdated", Integration.hooksStatus == .outdated
+      && Integration.missingEvents(in: mainSettings) == ["PostToolUseFailure"])
+Integration.addMissingHookEvents()
+check("not added from a copy outside Applications", Integration.missingEvents(in: mainSettings) == ["PostToolUseFailure"])
+try Integration.installHooks()
+check("updating adds the failure hook", Integration.hooksStatus == .installed && Integration.missingEvents(in: mainSettings).isEmpty
+      && commands(".claude/settings.json", "PreToolUse").contains("echo other"))
 
 try "{ not json".write(toFile: a[1] + "/.claude-plain/settings.json", atomically: true, encoding: .utf8)
 try FileManager.default.createDirectory(atPath: a[1] + "/.claude-bad", withIntermediateDirectories: true)

@@ -82,7 +82,13 @@ case "$1" in
             [ -f "$f" ] || continue
             read -r exp _ app < "$f"; left=$(( (exp - now) / 60 ))
             [ "$left" -ge 0 ] && echo "$(basename "$f")  ${left} min left${app:+  (app: $app)}"
-        done; true ;;
+        done
+        # Apps frozen right now (written by the app; the first line is its pid).
+        FROZEN="${MABEN_AWAKE_FROZEN:-$(dirname "$DIR")/frozen}"
+        if [ -f "$FROZEN" ]; then
+            apps=$(grep -v '^pid ' "$FROZEN" | cut -f2 | paste -sd ',' - | sed 's/,/, /g')
+            [ -n "$apps" ] && echo "frozen: $apps"
+        fi; true ;;
     log)
         EVENTS="$HOME/Library/Logs/MabenAwake.log"
         [ -f "$EVENTS" ] || { echo "awake: no log yet ($EVENTS)" >&2; exit 1; }

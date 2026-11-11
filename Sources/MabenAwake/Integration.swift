@@ -32,7 +32,8 @@ enum Integration {
 
     static var hookPath: String { bundle.appendingPathComponent("Contents/MacOS/maben-awake-hook").path }
     private static var hookCommand: String { "\"\(hookPath)\"" }
-    private static let hookEvents = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"]
+    /// PostToolUseFailure (1.6): a failed command is where the hook tells the agent which apps are frozen.
+    private static let hookEvents = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"]
     /// The hook's file name, now and before 1.5.
     private static let hookNames = ["maben-awake-hook", Legacy.hookName]
     /// Commands written by this app under any of its names, or by its old shell hook.
@@ -53,6 +54,23 @@ enum Integration {
         }
         if hookedSettingsFiles.contains(where: pointsAtOld) { _ = try? installHooks() }
         for agent in agents where files(of: agent).contains(where: pointsAtOld) { try? install(agent) }
+    }
+
+    /// Hooks installed by an older version lack the events added since
+    /// (PostToolUseFailure in 1.6). Adds them where this copy's hooks are
+    /// already in place; files without our hooks are left alone.
+    static func addMissingHookEvents() {
+        guard isInApplications, hookedSettingsFiles.contains(where: { !missingEvents(in: $0).isEmpty }) else { return }
+        _ = try? installHooks()
+    }
+
+    /// Events of `hookEvents` that the settings file doesn't send to our hook.
+    static func missingEvents(in url: URL) -> [String] {
+        guard let settings = try? read(url), let hooks = settings["hooks"] as? [String: Any] else { return hookEvents }
+        return hookEvents.filter { event in
+            let groups = hooks[event] as? [[String: Any]] ?? []
+            return !groups.contains { ($0["hooks"] as? [[String: Any]] ?? []).contains { callsHook($0["command"] as? String ?? "") } }
+        }
     }
 
     /// Every Claude Code settings file (`~/.claude*/settings.json`).
@@ -78,7 +96,7 @@ enum Integration {
         let escaped = hookPath.replacingOccurrences(of: "/", with: "\\/")
         let current = hooked.allSatisfy { url in
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return false }
-            return text.contains(hookPath) || text.contains(escaped)
+            return (text.contains(hookPath) || text.contains(escaped)) && missingEvents(in: url).isEmpty
         }
         return current ? .installed : .outdated
     }
@@ -96,7 +114,7 @@ enum Integration {
             for event in hookEvents {
                 var groups = strip(hooks[event] as? [[String: Any]] ?? [])
                 let entry: [String: Any] = ["type": "command", "command": hookCommand]
-                groups.append(event.hasSuffix("ToolUse") ? ["matcher": "", "hooks": [entry]] : ["hooks": [entry]])
+                groups.append(event.contains("ToolUse") ? ["matcher": "", "hooks": [entry]] : ["hooks": [entry]])
                 hooks[event] = groups
             }
             settings["hooks"] = hooks

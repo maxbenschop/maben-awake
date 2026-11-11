@@ -442,6 +442,7 @@ final class Model: ObservableObject {
     func shutdown() {
         guard !isPreview else { return }
         for pid in pausedPIDs { resume(pid: pid) }
+        FrozenList.write([])
         releaseAssertion()
         releaseDisplayAssertion()
         LidControl.setSleepDisabled(false)
@@ -627,6 +628,7 @@ final class Model: ObservableObject {
                 pause(pid: pid)
             }
         }
+        FrozenList.write(running.filter { pausedPIDs.contains($0.processIdentifier) })
 
         // 5. Refresh the list for the UI.
         let entries = running.map {

@@ -1,4 +1,4 @@
-import Foundation
+import AppKit
 
 /// A request from an external tool (Claude Code, a script…) to keep the Mac awake.
 ///
@@ -17,8 +17,10 @@ struct Lease: Identifiable, Hashable {
     var remaining: TimeInterval { expires.timeIntervalSinceNow }
 
     /// An AI turn or `awake run` in progress, as opposed to a scheduled wake-up,
-    /// cron, or an app request.
-    var isWork: Bool { app == nil && !name.hasSuffix("-wakeup") && !name.hasSuffix("-cron") }
+    /// cron, an app request, or work an agent left running in the background
+    /// (`-bg`, `-detached`): those keep the Mac awake for hours, but nobody is
+    /// working, so apps stay frozen and the menu doesn't say an AI is working.
+    var isWork: Bool { app == nil && !["-wakeup", "-cron", "-bg", "-detached"].contains { name.hasSuffix($0) } }
 }
 
 enum LeaseStore {
@@ -57,5 +59,27 @@ enum LeaseStore {
 
     static func removeAll() {
         for lease in active() { remove(lease) }
+    }
+}
+
+/// The apps frozen right now, for the agent hook: a tool call that names one
+/// wakes it, and a failed one is told which apps are frozen. One
+/// `<bundle ID>\t<name>` per line in `~/Library/Application Support/MabenAwake/frozen`
+/// (outside the leases folder, which the app watches), after a line with the
+/// app's pid: the hook ignores a list whose app is gone (force quit, crash).
+@MainActor
+enum FrozenList {
+    static let file = LeaseStore.directory.deletingLastPathComponent().appendingPathComponent("frozen")
+    private static var written: String?
+
+    static func write(_ apps: [NSRunningApplication]) {
+        let text = "pid \(ProcessInfo.processInfo.processIdentifier)\n" + apps.compactMap { app -> String? in
+            guard let id = app.bundleIdentifier else { return nil }
+            let name = (app.localizedName ?? id).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
+            return id + "\t" + name + "\n"
+        }.sorted().joined()
+        guard text != written else { return }
+        try? text.write(to: file, atomically: true, encoding: .utf8)
+        written = text
     }
 }
