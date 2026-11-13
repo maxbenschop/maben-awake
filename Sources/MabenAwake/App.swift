@@ -15,6 +15,9 @@ struct MabenAwakeApp: App {
         Legacy.moveSettings()
         Legacy.moveFiles()
         Instance.ensureSingle()   // may exit: another instance / the launchd agent takes over
+        // Only the copy that stays counts as a start (opening the app while it
+        // runs isn't a crash). A version that keeps crashing is swapped for the one before it.
+        CrashGuard.checkAtLaunch()   // may exit
         _model = StateObject(wrappedValue: Model.shared)
     }
 

@@ -35,7 +35,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         switch self {
         case .general: "keep awake manual login startup always on status"
         case .apps: "freeze frozen mode always while ai request reset shield"
-        case .lid: "lid closed battery sleep failsafe brightness dim screen unlock lock heat"
+        case .lid: "lid closed battery sleep failsafe brightness dim screen unlock lock locked heat away"
         case .ai: "agents claude code codex cursor gemini copilot opencode qwen droid devin windsurf augment kiro hooks awake command cli requests release log"
         case .about: "version log update website github"
         }
@@ -432,6 +432,21 @@ struct LidPane: View {
                       info: "Without it, macOS locks the screen after about half an hour and an agent can no longer click in apps.") {
                     MBToggle(isOn: $model.keepUnlockedWhenClosed)
                 }
+                MBRow(icon: "lock.fill", title: "Lock the screen when you open the lid",
+                      detail: "So whoever opens it has to log in.",
+                      info: "Only after the screen was kept unlocked with the lid closed. Without Maben Awake, macOS would have locked it.") {
+                    MBToggle(isOn: $model.lockWhenLidOpens).disabled(!model.keepUnlockedWhenClosed)
+                }
+            }
+
+            MBSection(title: "While the screen is locked",
+                      footer: LidControl.hasLid ? "For when you lock the Mac and walk away with the lid open."
+                                                : "This Mac has no lid, so a locked screen is how Maben Awake knows you're away.") {
+                MBRow(icon: "lock.display", title: "Freeze apps while the screen is locked",
+                      detail: "Treated like a closed lid: apps no agent needs are frozen.",
+                      info: "The screen isn't dimmed and stays locked. Unlocking it wakes every frozen app.") {
+                    MBToggle(isOn: $model.freezeWhileLocked).disabled(!model.pauseOthers)
+                }
             }
 
             MBSection(title: "Safety") {
@@ -559,19 +574,10 @@ struct AIPane: View {
                         .foregroundStyle(MB.muted)
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(16)
+                } else if onScreen {
+                    TimelineView(.periodic(from: .now, by: 1)) { _ in leaseRows }
                 } else {
-                    TimelineView(.periodic(from: .now, by: 1)) { _ in
-                        VStack(spacing: 0) {
-                            ForEach(model.leases) { lease in
-                                MBRow(icon: lease.symbol, title: lease.title) {
-                                    Text(lease.detail)
-                                        .font(.system(size: 12).monospacedDigit())
-                                        .foregroundStyle(MB.muted)
-                                    Button("Release") { model.release(lease) }.buttonStyle(.mbQuiet)
-                                }
-                            }
-                        }
-                    }
+                    leaseRows
                 }
             }
 
@@ -593,6 +599,21 @@ struct AIPane: View {
             }
         }
         .onAppear { refresh() }
+    }
+
+    @Environment(\.windowOnScreen) private var onScreen
+
+    private var leaseRows: some View {
+        VStack(spacing: 0) {
+            ForEach(model.leases) { lease in
+                MBRow(icon: lease.symbol, title: lease.title) {
+                    Text(lease.detail)
+                        .font(.system(size: 12).monospacedDigit())
+                        .foregroundStyle(MB.muted)
+                    Button("Release") { model.release(lease) }.buttonStyle(.mbQuiet)
+                }
+            }
+        }
     }
 }
 

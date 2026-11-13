@@ -9,6 +9,7 @@
 #   awake list                      show active holds
 #   awake log [lines]               why Maben Awake kept the Mac awake (or didn't), sleeps and wakes
 #   awake sleeplog [lines]          macOS's own record of real sleeps and wakes (pmset log)
+#   awake status                    check that everything Maben Awake needs is set up
 #   awake hook                      used by agent hooks (reads hook JSON on stdin)
 #
 # Holds are files in ~/Library/Application Support/MabenAwake/leases/<name>
@@ -99,72 +100,69 @@ case "$1" in
         pmset -g log | grep -E " (Sleep|Wake) +	" \
             | grep -vE "Maintenance Sleep|Sleep Service Back to Sleep|Notification Wake Back to Sleep|Entering DarkWake" \
             | sed -E 's/ +\+[0-9]{4} /  /; s/	+/  /g; s/ {3,}/  /g' | cut -c1-160 | tail -n "${2:-30}" ;;
+    status)
+        # One look at everything that has to be in place, for support questions.
+        APP="$(cd "$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../.." 2>/dev/null && pwd)"
+        ok() { printf '  ok    %s\n' "$*"; }
+        warn() { printf '  WARN  %s\n' "$*"; problems=$((problems + 1)); }
+        info() { printf '  ..    %s\n' "$*"; }
+        problems=0
+        version=$(/usr/bin/plutil -extract CFBundleShortVersionString raw "$APP/Contents/Info.plist" 2>/dev/null || echo "?")
+        echo "Maben Awake $version  ($APP)"
+        case "$APP" in /Applications/*|"$HOME"/Applications/*) ;; *) warn "the app isn't in an Applications folder, so hooks and updates won't work" ;; esac
+        if pgrep -xq MabenAwake; then ok "running (pid $(pgrep -x MabenAwake | head -1))"; else warn "not running: open Maben Awake"; fi
+        AGENT="$HOME/Library/LaunchAgents/gg.maben.awake.agent.plist"
+        if [ -f "$AGENT" ] && launchctl print "gui/$(id -u)/gg.maben.awake.agent" >/dev/null 2>&1; then
+            target=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$AGENT" 2>/dev/null)
+            case "$target" in "$APP"/*) ok "starts at login and after a crash" ;; *) warn "the launch agent starts another copy: $target" ;; esac
+        else
+            warn "doesn't start at login or restart after a crash (Settings > General > Open at login)"
+        fi
+        HOOK="$APP/Contents/MacOS/maben-awake-hook"
+        [ -x "$HOOK" ] || warn "the hook program is missing: $HOOK"
+        # Each agent set up on this Mac: <name>|<folder>|<file with the hooks>
+        connected=0
+        for entry in "Claude Code|.claude|.claude/settings.json" "Codex|.codex|.codex/hooks.json" "Cursor|.cursor|.cursor/hooks.json" \
+                     "Gemini CLI|.gemini|.gemini/settings.json" "GitHub Copilot|.copilot|.copilot/hooks/maben-awake.json" \
+                     "OpenCode|.config/opencode|.config/opencode/plugins/maben-awake.js" "Qwen Code|.qwen|.qwen/settings.json" \
+                     "Droid|.factory|.factory/hooks.json" "Devin|.config/devin|.config/devin/config.json" \
+                     "Augment|.augment|.augment/settings.json" "Kiro|.kiro|.kiro/hooks/maben-awake.json"; do
+            name=${entry%%|*}; rest=${entry#*|}; folder=${rest%%|*}; file=${rest#*|}
+            [ -d "$HOME/$folder" ] || continue
+            [ "$name" = Droid ] && [ ! -f "$HOME/$file" ] && file=.factory/settings.json
+            if grep -q "$HOOK" "$HOME/$file" 2>/dev/null; then ok "$name connected"; connected=$((connected + 1))
+            elif grep -qE "maben-awake-hook|sleepwalker-hook" "$HOME/$file" 2>/dev/null; then warn "$name points at another copy of the app (Settings > Agents > Update)"
+            else info "$name is set up on this Mac but not connected (Settings > Agents)"; fi
+        done
+        # Other Claude Code config folders (CLAUDE_CONFIG_DIR=~/.claude-work…) that have the hooks.
+        for file in "$HOME"/.claude-*/settings.json; do
+            [ -f "$file" ] || continue
+            folder=$(basename "$(dirname "$file")")
+            if grep -q "$HOOK" "$file"; then ok "Claude Code connected in ~/$folder"; connected=$((connected + 1))
+            elif grep -qE "maben-awake-hook|sleepwalker-hook" "$file"; then warn "Claude Code in ~/$folder points at another copy of the app (Settings > Agents > Update)"; fi
+        done
+        [ "$connected" -gt 0 ] || warn "no agent is connected, so nothing keeps the Mac awake while an AI works"
+        if [ -f /etc/sudoers.d/maben-awake ] || [ -f /etc/sudoers.d/sleepwalker ] || [ -f /etc/sudoers.d/awakekeeper ]; then
+            ok "can stay awake with the lid closed"
+        else
+            info "staying awake with the lid closed isn't set up (Settings > Lid & Power)"
+        fi
+        FAILSAFE=/Library/PrivilegedHelperTools/gg.maben.awake.failsafe
+        if [ -x "$FAILSAFE" ] && [ -f /Library/LaunchDaemons/gg.maben.awake.failsafe.plist ]; then
+            have=$("$FAILSAFE" --version 2>/dev/null); want=$("$APP/Contents/MacOS/maben-awake-failsafe" --version 2>/dev/null)
+            if [ -z "$want" ] || [ "$have" = "$want" ]; then ok "lid-open failsafe installed"; else warn "lid-open failsafe is version $have, this app has $want (Settings > Lid & Power > Safety)"; fi
+        else
+            info "lid-open failsafe not installed (Settings > Lid & Power > Safety)"
+        fi
+        if pmset -g 2>/dev/null | grep -q "SleepDisabled[[:space:]]*1"; then info "closed-lid sleep is blocked right now"; fi
+        n=0; for f in "$DIR"/*; do [ -f "$f" ] && n=$((n + 1)); done
+        info "$n active request(s), see: awake list"
+        if [ "$problems" -eq 0 ]; then echo "Everything is set up."; else echo "$problems problem(s) found."; exit 1; fi ;;
     hook)
-        # Claude Code hook. The compiled maben-awake-hook is ~8x faster; this
-        # shell version is only the fallback.
+        # Agent hooks call the compiled hook directly; this forwards to it.
         FAST="$(dirname "$(readlink -f "$0" 2>/dev/null || echo "$0")")/../MacOS/maben-awake-hook"
         shift
-        [ -x "$FAST" ] && exec "$FAST" "$@"
-        # Hook JSON arrives on stdin:
-        # {"session_id":"...","hook_event_name":"...","tool_name":"...","tool_input":{...}}
-        input=$(cat)
-        field() { printf '%s' "$input" | sed -n "s/.*\"$1\" *: *\"*\([^\",}]*\).*/\1/p" | head -1; }
-        sid=$(field session_id)
-        ev=$(field hook_event_name)
-        tool=$(field tool_name)
-        name="claude-$(printf '%s' "${sid:-unknown}" | cut -c1-8)"
-        own=$(owner)
-
-        { echo "$(date '+%F %T') $name $ev $tool"; } >> "$LOG" 2>/dev/null || true
-        [ "$(wc -l < "$LOG" 2>/dev/null || echo 0)" -gt 2000 ] && tail -500 "$LOG" > "$LOG.tmp" && mv "$LOG.tmp" "$LOG"
-
-        if [ "$ev" = "PreToolUse" ]; then
-            # Work that outlives the turn gets its own hold, which Stop does not release.
-            case "$tool" in
-                ScheduleWakeup)
-                    if [ "$(field stop)" = "true" ]; then release "$name-wakeup"
-                    else
-                        delay=$(field delaySeconds); delay=${delay%%.*}
-                        hold "$name-wakeup" $(( (${delay:-1800} + 59) / 60 + 5 )) "$own"
-                    fi ;;
-                CronCreate) hold "$name-cron" 1440 "$own" ;;
-                CronDelete) release "$name-cron" ;;
-                Monitor)    hold "$name-monitor" 60 "$own" ;;
-                Bash) [ "$(field run_in_background)" = "true" ] && hold "$name-bg" 30 "$own" ;;
-            esac
-
-            # Wake the apps this tool call is about to use.
-            case "$tool" in
-                *[Cc]hrome*|*[Bb]rowser*|*[Pp]laywright*|*preview_*) need browser 10 "$own" ;;
-            esac
-            if [ "$tool" = "Bash" ]; then
-                case "$input" in *docker*|*kubectl*) need docker 10 "$own" ;; esac
-                {
-                    printf '%s' "$input" \
-                        | grep -oE '(tell (application|app) \\"[^\\]+\\"|open -a \\"[^\\]+\\"|open -a [A-Za-z0-9.]+)' \
-                        | sed -E 's/^tell (application|app) \\"//; s/^open -a //; s/\\"//g; s/\\$//'
-                    # agent-desktop: `--app X` and `launch X` / `close-app X` (see maben-awake-hook).
-                    case "$input" in *agent-desktop*)
-                        val='(\\"[^"\\]+\\"|'"'"'[^'"'"']+'"'"'|[A-Za-z0-9.][A-Za-z0-9._-]*)'
-                        printf '%s' "$input" \
-                            | grep -oE -e "--app(=| +)$val" -e "agent-desktop +(launch|close-app)( +--?[a-zA-Z-]+)* +$val" \
-                            | sed -E 's/^--app(=| +)//; s/^agent-desktop +(launch|close-app)( +--?[a-zA-Z-]+)* +//; s/\\"//g' \
-                            | sed "s/^'//; s/'\$//" ;;
-                    esac
-                } | sort -u | while read -r app; do
-                        case "$app" in ""|"System Events"|Finder) ;; *) need "$app" 10 "$own" ;; esac
-                      done
-            fi
-        fi
-
-        case "$ev" in
-            Stop) release "$name"; release_needs "$own" ;;
-            SessionEnd) for f in "$DIR/$name" "$DIR/$name"-*; do rm -f "$f"; done; release_needs "$own" ;;
-            # A tool can run long (builds), so hold 2h while one is running; between
-            # tools a 15-min hold is plenty and limits a stale hold if Stop is missed.
-            PreToolUse) hold "$name" 120 "$own" ;;
-            *) hold "$name" 15 "$own" ;;
-        esac
-        exit 0 ;;
-    *) sed -n '2,11p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+        [ -x "$FAST" ] || { echo "awake: the hook program is missing ($FAST)" >&2; exit 0; }
+        exec "$FAST" "$@" ;;
+    *) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
 esac

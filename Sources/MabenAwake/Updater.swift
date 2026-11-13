@@ -13,9 +13,11 @@ import Security
 /// 3. Verify before touching anything: the app inside must be signed with the
 ///    Developer ID of team NJTYRVLSA8 with this bundle ID, notarized by Apple
 ///    (Gatekeeper accepts it), and newer than the running version.
-/// 4. Install: replace the app in place (asking for an administrator password only
-///    if the app folder isn't writable), wake every frozen app and restore sleep
-///    and brightness, then restart. launchd starts the new version within seconds.
+/// 4. Install: keep a copy of the running app (`CrashGuard.backup`), replace the app
+///    in place (asking for an administrator password only if the app folder isn't
+///    writable), wake every frozen app and restore sleep and brightness, then
+///    restart. launchd starts the new version within seconds. If it keeps crashing,
+///    `CrashGuard` puts the kept copy back.
 ///
 /// Automatic installs only happen while the lid is open and no agent is working,
 /// so an update never interrupts a job.
@@ -169,6 +171,11 @@ final class Updater: ObservableObject {
     /// Automatic install: wait until the lid is open and no agent is working.
     private func installWhenQuiet() {
         guard canInstall else { return }
+        // A version that was rolled back because it kept crashing waits for a newer one.
+        if let release = available, release.version == CrashGuard.rolledBackVersion {
+            EventLog.write("update: not installing \(release.version) automatically, it was rolled back")
+            return
+        }
         let model = Model.shared
         if !model.away && !model.aiWorking {
             install()
@@ -224,6 +231,8 @@ final class Updater: ObservableObject {
             else { throw Failure("The update doesn't contain an app.") }
             try Self.verify(newApp, expectedVersion: release.version)
             let target = await MainActor.run { Bundle.main.bundleURL }
+            // Kept so a release that keeps crashing can be rolled back (CrashGuard).
+            CrashGuard.keepBackup(of: target)
             try Self.replace(target, with: newApp)
             try? fm.removeItem(at: work)
             await MainActor.run { self.relaunch(version: release.version) }
@@ -272,18 +281,28 @@ final class Updater: ObservableObject {
         }
     }
 
-    /// Swaps the app bundle. The old copy goes to the Trash, so it can be restored by hand.
-    nonisolated static func replace(_ target: URL, with newApp: URL) throws {
+    /// Swaps the app bundle. The old copy is kept in Application Support (one
+    /// version only, see `CrashGuard`), not in the Trash, so updates don't pile up there.
+    nonisolated static func replace(_ target: URL, with newApp: URL, askForPassword: Bool = true) throws {
         let fm = FileManager.default
         if fm.isWritableFile(atPath: target.deletingLastPathComponent().path) && fm.isWritableFile(atPath: target.path) {
-            var trashed: NSURL?
-            try fm.trashItem(at: target, resultingItemURL: &trashed)
+            let aside = target.deletingLastPathComponent().appendingPathComponent(".Maben Awake.old.app")
+            try? fm.removeItem(at: aside)
+            do {
+                try fm.moveItem(at: target, to: aside)
+            } catch {
+                throw Failure("Couldn't install the update: \(error.localizedDescription)")
+            }
             do {
                 try fm.copyItem(at: newApp, to: target)
             } catch {
-                if let trashed { try? fm.moveItem(at: trashed as URL, to: target) }   // put the old one back
+                try? fm.removeItem(at: target)
+                try? fm.moveItem(at: aside, to: target)   // put the old one back
                 throw Failure("Couldn't install the update: \(error.localizedDescription)")
             }
+            try? fm.removeItem(at: aside)
+        } else if !askForPassword {
+            throw Failure("The app folder isn't writable without an administrator password.")
         } else {
             // Installed by an administrator: ask for the password once.
             let q = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }

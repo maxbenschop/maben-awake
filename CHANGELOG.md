@@ -3,6 +3,17 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
+## 1.7 · not released yet
+
+- Uses much less CPU: with the lid open and the menu closed, Maben Awake no longer checks every app every 3 seconds or redraws the closed menu every second.
+- Freezes more of a frozen app: the helpers macOS starts for it, such as the page processes of browsers built on WebKit, are frozen with it.
+- When you open the lid after the screen was kept unlocked, the screen locks, so whoever opens it has to log in. You can turn this off in Settings, Lid & Power.
+- New option: freeze apps while the screen is locked. On by default on Macs without a lid, such as a Mac mini or iMac.
+- Back at the Mac, the menu shows what happened while you were away: how long the Mac stayed awake, which agents worked, and the battery used.
+- If an update keeps crashing, Maben Awake goes back to the version before it by itself.
+- Opening the lid or unlocking the screen wakes frozen apps straight away.
+- `awake status` checks that everything is set up.
+
 ## 1.6 · 11 November 2026
 
 - Work an AI leaves running in the background, such as a build, tests or a server, keeps the Mac awake until it finishes, up to 8 hours after the AI's last turn. The AI no longer has to ask with `awake run`. This needs Claude Code; other agents keep the 30 minutes from before. While only background work is left, apps stay frozen and the menu doesn't say an AI is working.

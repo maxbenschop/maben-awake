@@ -19,5 +19,11 @@ let package = Package(
             path: "Sources/MabenAwakeFailsafe",
             linkerSettings: [.linkedFramework("IOKit"), .linkedFramework("SystemConfiguration")]
         ),
+        // `swift test`: the app's decisions (Decision.swift) and the updater, without touching the Mac.
+        .testTarget(
+            name: "MabenAwakeTests",
+            dependencies: ["MabenAwake"],
+            path: "tests/MabenAwakeTests"
+        ),
     ]
 )

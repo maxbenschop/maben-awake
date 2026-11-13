@@ -53,8 +53,13 @@ The app updates itself from GitHub Releases (`Sources/MabenAwake/Updater.swift`)
    open and no agent is working.
 3. It downloads `Maben-Awake.zip` from that release, and only installs it if the app inside is signed with
    the Developer ID of team NJTYRVLSA8 with this bundle ID, accepted by Gatekeeper (notarized), and has the
-   announced version. The old app goes to the Trash.
+   announced version. The old app is kept in `~/Library/Application Support/MabenAwake/Previous version/`
+   (one version, nothing in the Trash).
 4. It wakes every frozen app, restores sleep and brightness, and restarts as the new version.
+5. If the new version then starts 4 times within 3 minutes without running for a minute or quitting cleanly,
+   it puts the kept version back and restarts as that (`CrashGuard.swift`). The version that was rolled back
+   isn't installed automatically again; the next newer one is. This only protects updates installed by 1.7
+   or later, since 1.6 and earlier don't keep the old version.
 
 The website's download buttons go to `/download/latest.dmg`, which the web server redirects to
 `releases/latest/download/Maben-Awake.dmg` on GitHub, so they always serve the newest release.
@@ -85,8 +90,9 @@ to be moved to Applications first (`FirstRun.swift`).
 - **Only while a checked app is running** – the assertion is released as soon
   as none of your checked apps are running, so the Mac sleeps normally again.
 - **Freeze unneeded apps while lid is closed** – only with the lid closed,
-  apps that no AI needs are sent `SIGSTOP` (with their helper processes). They
-  use zero CPU. Opening the lid thaws everything. Apps that are still starting
+  apps that no AI needs are sent `SIGSTOP` (with their helper processes: child
+  processes, and the XPC services launchd starts for the app, such as WebKit's
+  page processes and open and save panels). They use zero CPU. Opening the lid thaws everything. Apps that are still starting
   up (first 15 s) are never frozen. Everything is also resumed when you quit
   Maben Awake, and a fresh start thaws anything a crashed instance left frozen.
 - **Screen brightness to 0 while lid is closed** – the previous brightness is
@@ -97,6 +103,24 @@ to be moved to Applications first (`FirstRun.swift`).
   any app. Maben Awake holds a display-sleep assertion while it keeps the Mac
   awake with the lid closed (never with the lid open), so the screen stays on
   (at brightness 0) and unlocked. Off switch in Settings → Lid & Power.
+- **Screen locks when the lid opens** – if the screen was kept unlocked while
+  the lid was closed, it locks the moment the lid opens, so whoever opens it has
+  to log in, as they would without Maben Awake. Off switch in Settings → Lid & Power.
+- **A locked screen can count as away** – Settings → Lid & Power → *Freeze apps
+  while the screen is locked*. Apps are frozen as with a closed lid (the screen
+  isn't dimmed) and wake when you unlock. On by default on Macs without a lid
+  (Mac mini, iMac, Mac Studio), off on laptops. The lid-open failsafe only
+  watches the lid; if Maben Awake hangs while the screen is locked, frozen apps
+  wake once it is restarted.
+- **While you were away** – back at the Mac, the menu sums up the time away:
+  how long the Mac was kept awake, which agents worked, how many apps were
+  frozen, the battery used, and whether the battery cutoff or the heat check
+  stopped it early. Also in the event log.
+- **Light on CPU** – with the lid open and no window showing, nothing can be
+  frozen, so the list of apps is read every 30 seconds instead of every 3 (and at
+  once when an app starts or quits), icons are loaded once per app, and the
+  menu's countdowns only tick while it's open. Lid and screen-lock changes are
+  handled the moment they happen.
 - Per-app modes – your choices are remembered per app (by bundle ID).
 - **Launch at login** – in Settings; enabled automatically on first run.
 
@@ -112,7 +136,7 @@ with live countdowns, and every running app with its mode.
 |---|---|
 | General | manual keep-awake, "only while an Always on app runs", open at login |
 | Apps | modes for running *and* remembered apps, search, reset per app or all |
-| Lid & Power | lid-closed mode (or its one-time setup), battery cutoff, freezing, dimming, keeping the screen unlocked |
+| Lid & Power | lid-closed mode (or its one-time setup), battery cutoff, freezing, dimming, keeping the screen unlocked, locking it when the lid opens, freezing while the screen is locked |
 | Agents | connect, update or remove Claude Code, the other agents set up on this Mac, and the `awake` CLI; active requests, copyable commands, logs |
 | About | version |
 
@@ -199,6 +223,7 @@ awake run tests -- npm test    # keep awake while a command runs
 awake list
 awake log                      # why the Mac was kept awake (or wasn't), sleeps and wakes
 awake sleeplog                 # macOS's own record of real sleeps and wakes
+awake status                   # is everything set up? (app, login item, agents, lid helper, failsafe)
 ```
 
 Leases are just files in `~/Library/Application Support/MabenAwake/leases/`,
@@ -272,8 +297,7 @@ If the lid was opened while the AI used the app, nothing is closed, since
 you may have opened those tabs yourself.
 
 The hooks call `Maben Awake.app/Contents/MacOS/maben-awake-hook`,
-a small compiled program (~8 ms per call; the old shell hook took ~50–60 ms).
-`awake hook` forwards to it. It prints nothing, so it costs the agent no tokens.
+a small compiled program (~8 ms per call). `awake hook` forwards to it. It prints nothing, so it costs the agent no tokens.
 
 Hooks request apps automatically for browser tools (→ default browser),
 `docker`/`kubectl` commands, `osascript 'tell application "X"'`,
@@ -284,13 +308,18 @@ Hooks request apps automatically for browser tools (→ default browser),
 
 ## Testing
 
+`swift test` runs the unit tests (`tests/MabenAwakeTests`): every keep-awake,
+lid, screen and freezing decision (`Decision.swift`, which `Model.apply()` only
+carries out), which processes count as an app's helpers, the crash-loop check,
+the away summary, and the updater's version check and app swap. They touch
+nothing on the Mac, and run in CI.
+
 `tests/deep-test.sh` runs a ~2 minute end-to-end test (auto-freeze, helper
 processes, CPU while frozen, wake on request, expiry, owner crash, two
 requesters, closed-lid power state) and writes a report to the Desktop. `tests/lid-test.sh` checks the real
 lid close/open cycle, `tests/cleanup-test.sh` the tab/app cleanup (run it while no other AI
 session is using the browser, or its tab checks are correctly skipped),
-`tests/hook-equivalence-test.py` compares the compiled hook with the shell
-version, `tests/agent-hooks-test.py` checks the hook against every agent's events, `tests/failsafe-test.sh` runs the failsafe daemon's lid-open logic with
+`tests/agent-hooks-test.py` checks the hook against every agent's events, `tests/failsafe-test.sh` runs the failsafe daemon's lid-open logic with
 a fake lid and a dry run (safe while Maben Awake runs), and `tests/live-session-test.sh` runs a real headless Claude session.
 Dia note: reading page content via AppleScript JavaScript needs Dia launched
 with `--enable-applescript-javascript`; the test reads the tab title/URL from
@@ -301,7 +330,8 @@ renders the menu and every Settings tab (light and dark) to PNGs with canned
 data and a demo set of connected agents (a scratch home folder, so nothing of
 this Mac's setup shows up). It never starts the real app, so it's safe while
 Maben Awake is running. The pictures in `docs/screenshots/` come from it; run
-`./build.sh` once first so the About page has the app icon.
+`./build.sh` once first so the About page has the app icon. CI renders them too,
+so a release that crashes when it draws the menu or Settings never gets merged.
 
 ## Notes
 
@@ -311,7 +341,7 @@ Maben Awake is running. The pictures in `docs/screenshots/` come from it; run
   closes, so Maben Awake uses `pmset disablesleep`. Click the *Lid closed…*
   tile in the menu (or *Set Up…* in Settings → Lid & Power) once; it asks for
   your password and installs
-  `/etc/sudoers.d/awakekeeper`, which allows only
+  `/etc/sudoers.d/maben-awake`, which allows only
   `pmset -a disablesleep 0|1` without a password. Closed-lid sleep is blocked
   only while Maben Awake is keeping the Mac awake, below 20% battery (adjustable
   in Settings) it's re-enabled, and quitting the app always re-enables it. Remove with

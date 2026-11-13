@@ -23,15 +23,25 @@ jobs:
         run: swift build
       - name: Build (release)
         run: swift build -c release
+      - name: Unit tests
+        run: swift test
       - name: Installer tests
         run: ./tests/integration-test.sh
       - name: Hook tests (every agent's events)
         run: python3 tests/agent-hooks-test.py .build/debug/MabenAwakeHook
+      - name: UI renders (menu and every Settings page)
+        # Starts the app's real views with canned data. A release that crashes as it draws never gets merged.
+        run: |
+          .build/debug/MabenAwake --snapshot "$RUNNER_TEMP/snaps"
+          count=$(ls "$RUNNER_TEMP/snaps"/*.png | wc -l)
+          echo "$count pictures"
+          [ "$count" -ge 20 ] || { echo "::error::expected at least 20 snapshots, got $count"; exit 1; }
       - name: Scripts parse
         run: |
           zsh -n release.sh
           zsh -n publish.sh
           sh -n build.sh
+          sh -n Resources/awake
       - name: Version has a changelog entry
         run: |
           VERSION=$(plutil -extract CFBundleShortVersionString raw Info.plist)
