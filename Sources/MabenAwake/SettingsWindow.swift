@@ -89,7 +89,12 @@ struct SettingsRoot: View {
         .environment(\.colorScheme, .dark)
         .tint(MB.green)
         .background(KeyboardNavigation())
+        .background(WindowVisibility(visible: $onScreen))
+        .environment(\.windowOnScreen, onScreen)
     }
+
+    /// The window is kept when closed; its countdowns only tick while it shows.
+    @State private var onScreen = true
 }
 
 /// ⌘1–⌘5 jump to a page; ⌘↑ and ⌘↓ go to the previous or next one.

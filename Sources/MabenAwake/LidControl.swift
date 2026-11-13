@@ -81,12 +81,56 @@ enum LidControl {
     }
 
     /// True while the MacBook's lid is closed.
-    static var isLidClosed: Bool {
+    static var isLidClosed: Bool { clamshellState ?? false }
+
+    /// A laptop. Desktop Macs (Mac mini, iMac, Mac Studio, Mac Pro) have no
+    /// clamshell state at all.
+    static let hasLid = clamshellState != nil
+
+    private static var clamshellState: Bool? {
         let entry = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
-        guard entry != 0 else { return false }
+        guard entry != 0 else { return nil }
         defer { IOObjectRelease(entry) }
-        return (IORegistryEntryCreateCFProperty(entry, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?
-            .takeRetainedValue() as? Bool) ?? false
+        return IORegistryEntryCreateCFProperty(entry, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?
+            .takeRetainedValue() as? Bool
+    }
+
+    /// The login session's screen is locked (the lock screen is showing).
+    static var isScreenLocked: Bool {
+        (CGSessionCopyCurrentDictionary() as? [String: Any])?["CGSSessionScreenIsLocked"] as? Bool ?? false
+    }
+
+    /// Locks the screen now, as Lock Screen in the Apple menu does. Uses the
+    /// private login framework behind that menu item; falls back to turning the
+    /// display off, which locks when the Mac asks for the password right away.
+    @discardableResult
+    static func lockScreen() -> Bool {
+        if let handle = dlopen("/System/Library/PrivateFrameworks/login.framework/Versions/Current/login", RTLD_LAZY),
+           let symbol = dlsym(handle, "SACLockScreenImmediate") {
+            typealias Lock = @convention(c) () -> Int32
+            return unsafeBitCast(symbol, to: Lock.self)() == 0
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pmset")
+        p.arguments = ["displaysleepnow"]
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        return p.terminationStatus == 0
+    }
+
+    /// Battery charge in percent, on AC or not; nil without a battery.
+    static var batteryPercent: Int? {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue(),
+              let list = IOPSCopyPowerSourcesList(info)?.takeRetainedValue() as? [CFTypeRef]
+        else { return nil }
+        for source in list {
+            guard let desc = IOPSGetPowerSourceDescription(info, source)?.takeUnretainedValue() as? [String: Any],
+                  desc[kIOPSTypeKey] as? String == kIOPSInternalBatteryType,
+                  let capacity = desc[kIOPSCurrentCapacityKey] as? Int
+            else { continue }
+            return capacity
+        }
+        return nil
     }
 
     /// An external display is connected and on. With the lid closed that means

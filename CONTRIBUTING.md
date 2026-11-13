@@ -19,7 +19,7 @@ your fork / branch ──PR──▶ main ──release.sh + publish.sh──▶
 
 1. Fork the repository (or, if you have write access, create a branch).
 2. Build and run: `swift build && ./build.sh install` builds a development copy and installs it.
-3. Run the tests: `./tests/integration-test.sh`. The `tests/` folder has longer end-to-end tests for the lid and
+3. Run the tests: `swift test` and `./tests/integration-test.sh`. The `tests/` folder has longer end-to-end tests for the lid and
    freezing; run the ones that touch what you changed.
 4. If people will notice the change, add a line under the top section of `CHANGELOG.md`. Don't change the version
    in `Info.plist`; that happens when releasing.
@@ -29,7 +29,8 @@ your fork / branch ──PR──▶ main ──release.sh + publish.sh──▶
 
 These are enforced by the repository rules on `main`:
 
-- The **Build and test** check passes (GitHub Actions: debug and release build, installer tests, scripts, changelog).
+- The **Build and test** check passes (GitHub Actions: debug and release build, unit tests, installer and hook tests, the UI
+  rendered once, scripts, changelog).
 - One approving review from a code owner (`.github/CODEOWNERS`).
 - All review conversations resolved.
 - Merged with **squash**, so `main` has one commit per pull request and a straight history. The branch is deleted

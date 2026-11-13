@@ -95,7 +95,10 @@ enum Snapshot {
         ]
         let modes: [String: AppMode] = ["com.docker.docker": .always, "com.figma.desktop": .whileAI,
                                         "com.apple.dt.Xcode": .always, "com.apple.mail": .onDemand]
+        let back = AwaySummary(duration: 2 * 3600 + 14 * 60, keptAwake: 3600 + 50 * 60, agents: ["Claude", "Codex"],
+                               otherRequests: false, mostFrozen: 4, batteryStart: 86, batteryEnd: 61, stoppedBecause: nil)
         let busy = Model(preview: entries, leases: leases, asserting: true, away: true, modes: modes)
+        let returned = Model(preview: entries, leases: Array(leases.prefix(1)), asserting: true, modes: modes, awaySummary: back)
         let idle = Model(preview: Array(entries.prefix(5)), leases: [], asserting: false, modes: modes,
                          lidHelper: false, recovered: true)
         idle.keepAwake = false
@@ -106,6 +109,7 @@ enum Snapshot {
             render(MenuView().environmentObject(busy), "menu-busy-\(suffix)", appearance, dir, menu: true)
             render(MenuView().environmentObject(idle), "menu-idle-\(suffix)", appearance, dir, menu: true)
             render(MenuView().environmentObject(hot), "menu-hot-\(suffix)", appearance, dir, menu: true)
+            render(MenuView().environmentObject(returned), "menu-back-\(suffix)", appearance, dir, menu: true)
             for pane in SettingsPane.allCases {
                 render(pane.view.environmentObject(busy), "settings-\(pane.rawValue)-\(suffix)", appearance, dir)
             }

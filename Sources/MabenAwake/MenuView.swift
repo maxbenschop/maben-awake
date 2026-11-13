@@ -45,7 +45,13 @@ struct MenuView: View {
         .environment(\.colorScheme, .dark)
         .tint(MB.green)
         .background(GeometryReader { geo in WindowFitter(height: geo.size.height) })
+        .background(WindowVisibility(visible: $visible))
+        .environment(\.windowOnScreen, visible)
     }
+
+    /// The menu window stays alive while it's closed; SwiftUI keeps updating it.
+    /// Only tick the countdowns while it's on screen.
+    @State private var visible = false
 
     private var listHeight: CGFloat {
         let leases = model.leases.isEmpty ? 0 : 26 + CGFloat(model.leases.count) * 30
@@ -75,6 +81,54 @@ private struct WindowFitter: NSViewRepresentable {
         frame.size.height += delta
         frame.origin.y -= delta
         window.setFrame(frame, display: true)
+    }
+}
+
+/// Reports whether the window it's in is on screen.
+struct WindowVisibility: NSViewRepresentable {
+    @Binding var visible: Bool
+
+    func makeNSView(context: Context) -> Watcher {
+        let view = Watcher()
+        view.onChange = { visible = $0 }
+        return view
+    }
+
+    func updateNSView(_ view: Watcher, context: Context) { view.onChange = { visible = $0 } }
+
+    final class Watcher: NSView {
+        var onChange: (Bool) -> Void = { _ in }
+        private var observers: [NSObjectProtocol] = []
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            observers.forEach(NotificationCenter.default.removeObserver)
+            observers = []
+            guard let window else { return }
+            for name in [NSWindow.didChangeOcclusionStateNotification, NSWindow.didBecomeKeyNotification,
+                         NSWindow.didResignKeyNotification, NSWindow.willCloseNotification] {
+                observers.append(NotificationCenter.default.addObserver(forName: name, object: window, queue: .main) { [weak self] note in
+                    MainActor.assumeIsolated { self?.report(closing: note.name == NSWindow.willCloseNotification) }
+                })
+            }
+            report(closing: false)
+        }
+
+        private func report(closing: Bool) {
+            guard let window else { return }
+            let shown = !closing && window.isVisible && window.occlusionState.contains(.visible)
+            DispatchQueue.main.async { self.onChange(shown) }
+        }
+    }
+}
+
+private struct WindowOnScreenKey: EnvironmentKey { static let defaultValue = true }
+
+extension EnvironmentValues {
+    /// False while the window (the menu or Settings) is closed.
+    var windowOnScreen: Bool {
+        get { self[WindowOnScreenKey.self] }
+        set { self[WindowOnScreenKey.self] = newValue }
     }
 }
 
@@ -243,9 +297,17 @@ private struct Notices: View {
                        text: "Recovered from a crash. Frozen apps were thawed.",
                        dismiss: { model.dismissCrashNotice() })
             }
+            if let summary = model.awaySummary {
+                Notice(symbol: summary.stoppedBecause == nil ? "moon.stars.fill" : "exclamationmark.triangle.fill",
+                       tint: summary.stoppedBecause == nil ? MB.green : .orange,
+                       text: summary.text
+                           + (summary.stoppedBecause.map { ". Stopped early: \($0)." } ?? "."),
+                       dismiss: { model.dismissAwaySummary() })
+            }
         }
         .padding(.horizontal, 14)
-        .padding(.bottom, model.overheated || model.recoveredFromCrash || updater.available != nil ? 12 : 0)
+        .padding(.bottom, model.overheated || model.recoveredFromCrash || updater.available != nil
+                 || model.awaySummary != nil ? 12 : 0)
     }
 }
 
@@ -323,12 +385,21 @@ private struct AIRequests: View {
                     .buttonStyle(.link)
                     .font(.system(size: 11))
             }
-            // Countdowns tick even when nothing else changes.
-            TimelineView(.periodic(from: .now, by: 1)) { _ in
-                VStack(spacing: 2) {
-                    ForEach(model.leases) { lease in LeaseRow(lease: lease) }
-                }
+            // Countdowns tick even when nothing else changes, but only while the
+            // menu is open: a closed menu redrawing every second costs CPU all day.
+            if visible {
+                TimelineView(.periodic(from: .now, by: 1)) { _ in rows }
+            } else {
+                rows
             }
+        }
+    }
+
+    @Environment(\.windowOnScreen) private var visible
+
+    private var rows: some View {
+        VStack(spacing: 2) {
+            ForEach(model.leases) { lease in LeaseRow(lease: lease) }
         }
     }
 }

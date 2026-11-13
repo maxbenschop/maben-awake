@@ -8,6 +8,6 @@
 
 ## Checklist
 
-- [ ] `swift build` and `./tests/integration-test.sh` pass
+- [ ] `swift build`, `swift test` and `./tests/integration-test.sh` pass
 - [ ] If people will notice the change: a line under the next version in `CHANGELOG.md`
 - [ ] No version bump in `Info.plist` (the maintainer does that when releasing)

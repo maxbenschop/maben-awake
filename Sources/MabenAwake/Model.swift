@@ -33,7 +33,7 @@ enum AppMode: String, CaseIterable, Identifiable {
         switch self {
         case .always: "Never frozen."
         case .whileAI: "Awake while any AI turn or `awake run` is active."
-        case .onDemand: "Frozen until an AI asks for it with `awake need`."
+        case .onDemand: "Frozen until an AI uses it; woken by itself when a command needs it."
         }
     }
 }
@@ -83,6 +83,16 @@ final class Model: ObservableObject {
     @Published var keepUnlockedWhenClosed: Bool {
         didSet { defaults.set(keepUnlockedWhenClosed, forKey: "keepUnlockedWhenClosed"); apply() }
     }
+    /// Lock the screen when the lid opens after it was kept unlocked, so whoever
+    /// opens the lid has to log in, as without Maben Awake.
+    @Published var lockWhenLidOpens: Bool {
+        didSet { defaults.set(lockWhenLidOpens, forKey: "lockWhenLidOpens") }
+    }
+    /// A locked screen counts as away too: apps are frozen while it's locked.
+    /// On by default on Macs without a lid, where the lid never closes.
+    @Published var freezeWhileLocked: Bool {
+        didSet { defaults.set(freezeWhileLocked, forKey: "freezeWhileLocked"); apply() }
+    }
     /// Also stay awake with the lid closed (needs the one-time helper).
     @Published var lidClosedMode: Bool {
         didSet { defaults.set(lidClosedMode, forKey: "lidClosedMode"); apply() }
@@ -125,8 +135,11 @@ final class Model: ObservableObject {
             if actual != launchAtLogin { launchAtLogin = actual }
         }
     }
-    /// Lid closed and no external display: nobody is at the Mac.
+    /// Nobody is at the Mac: the lid is closed with no external display, or the
+    /// screen is locked and `freezeWhileLocked` is on.
     @Published private(set) var away = false
+    /// What happened the last time nobody was at the Mac, until dismissed.
+    @Published private(set) var awaySummary: AwaySummary?
     /// Mac got too hot while away; we stopped keeping it awake so it can sleep.
     @Published private(set) var overheated = false
     /// Set when this run started after the previous one crashed.
@@ -139,8 +152,22 @@ final class Model: ObservableObject {
     /// Display-sleep assertion, held only while away (see `keepUnlockedWhenClosed`).
     private var displayAssertionID: IOPMAssertionID = 0
     private var pausedPIDs = Set<pid_t>()
-    /// Helper processes (browser tabs, Electron helpers…) frozen with each app.
+    /// Helper processes (browser tabs, Electron helpers, XPC services…) frozen with each app.
     private var pausedChildren: [pid_t: [pid_t]] = [:]
+    /// The running apps from the last scan. Listing them asks Launch Services
+    /// about every app, so with the lid open and no window showing (when nothing
+    /// can be frozen and nobody sees the list) it's done every 30 seconds instead
+    /// of every 3, and right away when an app starts or quits.
+    private var appCache: [NSRunningApplication]?
+    private var appsScannedAt = Date.distantPast
+    /// App icons by pid: loading one reads the app's bundle from disk.
+    private var iconCache: [pid_t: NSImage] = [:]
+    private var watchers: Watchers?
+    private var lastLidAway: Bool?
+    /// The screen was kept on (and unlocked) during this lid-closed stretch.
+    private var screenHeldWhileAway = false
+    private var awayTracker: AwayTracker?
+    private var loggedLock: String?
     /// When each app last stopped being frontmost, so apps the user clicked
     /// can be frozen again once they've been in the background a while.
     private var leftFrontAt: [pid_t: Date] = [:]
@@ -177,6 +204,8 @@ final class Model: ObservableObject {
         lidClosedMode = defaults.object(forKey: "lidClosedMode") as? Bool ?? true
         dimWhenClosed = defaults.object(forKey: "dimWhenClosed") as? Bool ?? true
         keepUnlockedWhenClosed = defaults.object(forKey: "keepUnlockedWhenClosed") as? Bool ?? true
+        lockWhenLidOpens = defaults.object(forKey: "lockWhenLidOpens") as? Bool ?? true
+        freezeWhileLocked = defaults.object(forKey: "freezeWhileLocked") as? Bool ?? !LidControl.hasLid
         batteryCutoff = defaults.object(forKey: "batteryCutoff") as? Int ?? 20
         checked = Set(defaults.stringArray(forKey: "checked") ?? [])
         aiOnly = Set(defaults.stringArray(forKey: "aiOnly") ?? [])
@@ -218,10 +247,19 @@ final class Model: ObservableObject {
             guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication else { return }
             Task { @MainActor in
                 self?.pausedPIDs.remove(app.processIdentifier)
+                self?.pausedChildren[app.processIdentifier] = nil
                 self?.userResumed.remove(app.processIdentifier)
+                self?.appCache = nil
                 self?.apply()
             }
         })
+        observers.append(center.addObserver(
+            forName: NSWorkspace.didLaunchApplicationNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.appCache = nil; self?.apply() } })
+        // The menu or Settings opening: show the current apps straight away.
+        observers.append(NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { [weak self] _ in MainActor.assumeIsolated { self?.appCache = nil; self?.apply() } })
 
         // Log every sleep and wake with the state at that moment, so a Mac
         // that fell asleep unexpectedly can be explained afterwards.
@@ -258,15 +296,22 @@ final class Model: ObservableObject {
             leaseWatcher = source
         }
 
+        // React to the lid and the screen lock at once, not on the next check.
+        watchers = Watchers { [weak self] in self?.apply() }
+
         timer = Timer.scheduledTimer(withTimeInterval: 3, repeats: true) { [weak self] _ in
             Task { @MainActor in self?.apply() }
         }
         apply()
+
+        // Still running after a minute: this version starts fine.
+        DispatchQueue.main.asyncAfter(deadline: .now() + CrashGuard.stableAfter) { CrashGuard.markStable() }
     }
 
     /// A model with canned state for rendering the UI; has no side effects.
     init(preview apps: [AppEntry], leases: [Lease], asserting: Bool, away: Bool = false,
-         modes: [String: AppMode] = [:], lidHelper: Bool = true, recovered: Bool = false, overheated: Bool = false) {
+         modes: [String: AppMode] = [:], lidHelper: Bool = true, recovered: Bool = false, overheated: Bool = false,
+         awaySummary: AwaySummary? = nil) {
         defaults = UserDefaults(suiteName: "gg.maben.awake.preview")!
         isPreview = true
         keepAwake = true
@@ -274,6 +319,9 @@ final class Model: ObservableObject {
         pauseOthers = true
         dimWhenClosed = true
         keepUnlockedWhenClosed = true
+        lockWhenLidOpens = true
+        freezeWhileLocked = false
+        self.awaySummary = awaySummary
         lidClosedMode = true
         batteryCutoff = 20
         checked = Set(modes.filter { $0.value == .always }.keys)
@@ -348,6 +396,7 @@ final class Model: ObservableObject {
     var frozenCount: Int { apps.filter(\.isPaused).count }
 
     func dismissCrashNotice() { recoveredFromCrash = false }
+    func dismissAwaySummary() { awaySummary = nil }
 
     var state: KeepAwakeState {
         if overheated { return .overheated }
@@ -432,7 +481,8 @@ final class Model: ObservableObject {
         let requests = leases.count
         if requests > 0 { parts.append(requests == 1 ? "1 AI request" : "\(requests) AI requests") }
         else { parts.append("Kept awake manually") }
-        if away { parts.append(pauseOthers ? "lid closed, \(frozenCount) frozen" : "lid closed") }
+        let place = lidClosed ? "lid closed" : "screen locked"
+        if away { parts.append(pauseOthers ? "\(place), \(frozenCount) frozen" : place) }
         else if lidClosed { parts.append("external display") }
         else if lidSleepDisabled { parts.append("lid can close") }
         return parts.joined(separator: " · ")
@@ -449,6 +499,7 @@ final class Model: ObservableObject {
         restoreBrightness()
         Heartbeat.write(lidClosed: LidControl.isLidClosed, savedBrightness: nil, quit: true)
         defaults.set(false, forKey: "running")
+        CrashGuard.cleanExit()
         EventLog.write("quit cleanly")
     }
 
@@ -466,9 +517,11 @@ final class Model: ObservableObject {
 
     // MARK: Core logic
 
-    private func runningApps() -> [NSRunningApplication] {
+    /// The regular (Dock) apps, from the cache unless `fresh` or it's 30 s old.
+    private func runningApps(fresh: Bool) -> [NSRunningApplication] {
+        if !fresh, let appCache, Date().timeIntervalSince(appsScannedAt) < 30 { return appCache }
         let me = ProcessInfo.processInfo.processIdentifier
-        return NSWorkspace.shared.runningApplications.filter {
+        let list = NSWorkspace.shared.runningApplications.filter {
             $0.activationPolicy == .regular
                 // -1 means the app has no process (e.g. it is quitting).
                 && Signals.isSafeTarget($0.processIdentifier)
@@ -476,13 +529,34 @@ final class Model: ObservableObject {
                 && $0.bundleIdentifier != "com.apple.finder"
                 && $0.bundleIdentifier != nil
         }
+        appCache = list
+        appsScannedAt = Date()
+        let pids = Set(list.map(\.processIdentifier))
+        iconCache = iconCache.filter { pids.contains($0.key) }
+        return list
     }
 
     private func apply() {
         guard !isPreview else { return }
-        let running = runningApps()
         let currentLeases = LeaseStore.active()
         if currentLeases != leases { leases = currentLeases }
+
+        // Away = lid closed and no external display (clamshell mode means the
+        // user is working on the external screen, so nothing is frozen or dimmed),
+        // or a locked screen when the user asked for that to count.
+        let closed = LidControl.isLidClosed
+        let locked = LidControl.isScreenLocked
+        let presence = Decision.presence(lidClosed: closed, externalDisplay: closed && LidControl.externalDisplayActive,
+                                         screenLocked: locked, freezeWhileLocked: freezeWhileLocked)
+        let nowAway = presence.away
+        if closed != lidClosed { lidClosed = closed }
+        if nowAway != away { away = nowAway }
+        logChange(&loggedLidState, closed ? (presence.lidAway ? "lid closed" : "lid closed, external display") : "lid open")
+        if freezeWhileLocked { logChange(&loggedLock, locked ? "screen locked: counts as away" : "screen unlocked") }
+
+        // With the lid open and no window showing, nothing can be frozen and
+        // nobody sees the list, so the apps can come from the cache.
+        let running = runningApps(fresh: nowAway || closed || !pausedPIDs.isEmpty || UIVisibility.anyWindowVisible)
 
         // 1. Should we be holding the Mac awake right now?
         //    Either the manual toggle says so, or an external tool holds a lease.
@@ -491,14 +565,6 @@ final class Model: ObservableObject {
         let anyCheckedRunning = running.contains { checked.contains($0.bundleIdentifier!) }
         let manual = keepAwake && (!onlyWhileCheckedRunning || anyCheckedRunning)
         let power = LidControl.powerDescription
-
-        // Away = lid closed and no external display (clamshell mode means the
-        // user is working on the external screen, so nothing is frozen or dimmed).
-        let closed = LidControl.isLidClosed
-        let nowAway = closed && !LidControl.externalDisplayActive
-        if closed != lidClosed { lidClosed = closed }
-        if nowAway != away { away = nowAway }
-        logChange(&loggedLidState, closed ? (nowAway ? "lid closed" : "lid closed, external display") : "lid open")
         logChange(&loggedPower, power == "AC" ? "power: AC" : "power: battery",
                   detail: power == "AC" ? nil : String(power.dropFirst("battery ".count)))
 
@@ -506,30 +572,27 @@ final class Model: ObservableObject {
         // allowed to sleep. Cleared once someone is back at the Mac.
         let thermal = (defaults.object(forKey: "testThermalState") as? Int)
             .flatMap(ProcessInfo.ThermalState.init(rawValue:)) ?? ProcessInfo.processInfo.thermalState
-        let heatApplies = nowAway || defaults.object(forKey: "testThermalState") != nil
-        if heatApplies && thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue {
-            if !overheated {
-                overheated = true
-                EventLog.write("thermal state \(thermal.rawValue) while lid closed: releasing keep-awake so the Mac can sleep")
-            }
-        } else if !heatApplies && overheated {
-            overheated = false
-            EventLog.write("back at the Mac: heat cutoff cleared")
+        let heatApplies = presence.lidAway || defaults.object(forKey: "testThermalState") != nil
+        let hot = Decision.overheated(current: overheated, heatApplies: heatApplies,
+                                      serious: thermal.rawValue >= ProcessInfo.ThermalState.serious.rawValue)
+        if hot != overheated {
+            overheated = hot
+            EventLog.write(hot ? "thermal state \(thermal.rawValue) while lid closed: releasing keep-awake so the Mac can sleep"
+                               : "back at the Mac: heat cutoff cleared")
         }
 
-        let shouldAssert = (manual || !currentLeases.isEmpty) && !overheated
-        shouldAssert ? acquireAssertion() : releaseAssertion()
+        let lowBattery = LidControl.batteryBelow(batteryCutoff)
+        let decision = Decision.power(.init(
+            manual: manual, hasRequests: !currentLeases.isEmpty, overheated: overheated,
+            lidClosedMode: lidClosedMode, lidHelperInstalled: lidHelperInstalled, lowBattery: lowBattery,
+            batteryCutoff: batteryCutoff, lidAway: presence.lidAway, keepUnlockedWhenClosed: keepUnlockedWhenClosed))
+        decision.keepAwake ? acquireAssertion() : releaseAssertion()
         logChange(&loggedAwake, awakeDecision(running: running, manual: manual, leases: currentLeases))
 
         // 2. Closed-lid sleep: only blocked while we're keeping the Mac awake,
         //    and never on a nearly empty battery.
-        let lowBattery = LidControl.batteryBelow(batteryCutoff)
-        let wantLid = shouldAssert && lidClosedMode && lidHelperInstalled && !lowBattery
-        logChange(&loggedLid, wantLid ? "closed-lid sleep: blocked"
-            : "closed-lid sleep: allowed (" + (!shouldAssert ? "not keeping awake"
-                : !lidClosedMode ? "lid-closed mode is off"
-                : !lidHelperInstalled ? "lid helper not installed"
-                : "battery below \(batteryCutoff)%") + ")")
+        let wantLid = decision.blockLidSleep
+        logChange(&loggedLid, decision.lidLine)
         // Compare against the real system value, not just what we last set:
         // another app can turn `disablesleep` off, and then closing the lid
         // would sleep the Mac even though we're holding it awake.
@@ -558,36 +621,59 @@ final class Model: ObservableObject {
         //    minutes later macOS locks the screen. From then on an AI can't
         //    click anything, so hold a display-sleep assertion while away.
         //    Never with the lid open: there the screen should sleep as usual.
-        let wantScreenOn = shouldAssert && nowAway && keepUnlockedWhenClosed
-        wantScreenOn ? acquireDisplayAssertion() : releaseDisplayAssertion()
-        if nowAway {
-            logChange(&loggedScreen, wantScreenOn ? "screen: kept on so it doesn't lock"
-                : "screen: may turn off and lock (" + (!shouldAssert ? "not keeping awake" : "keep-unlocked is off") + ")")
+        decision.keepScreenOn ? acquireDisplayAssertion() : releaseDisplayAssertion()
+        if presence.lidAway {
+            if decision.keepScreenOn { screenHeldWhileAway = true }
+            logChange(&loggedScreen, decision.keepScreenOn ? "screen: kept on so it doesn't lock"
+                : "screen: may turn off and lock (" + (!decision.keepAwake ? "not keeping awake" : "keep-unlocked is off") + ")")
         } else {
             loggedScreen = nil
         }
 
-        // 4. Away transitions: dim the screen while away, restore when back.
+        // 4. Lid transitions: dim the screen while the lid is closed, restore it
+        //    when it opens, and lock it if it was kept unlocked meanwhile.
+        if presence.lidAway != lastLidAway {
+            let wasLidAway = lastLidAway == true
+            lastLidAway = presence.lidAway
+            if presence.lidAway {
+                if dimWhenClosed { dimScreen() }
+            } else {
+                restoreBrightness()
+                if wasLidAway && !closed && screenHeldWhileAway && lockWhenLidOpens {
+                    EventLog.write(LidControl.lockScreen() ? "lid opened: locked the screen, which was kept unlocked"
+                                                           : "lid opened: could not lock the screen")
+                }
+                screenHeldWhileAway = false
+            }
+        }
+        // Back at the Mac (lid open, or screen unlocked): wake anything a
+        // previous instance left frozen, and sum up what happened meanwhile.
         if nowAway != lastAway {
             lastAway = nowAway
-            if nowAway { if dimWhenClosed { dimScreen() } } else { restoreBrightness(); thawStrays() }
+            if nowAway {
+                awayTracker = AwayTracker(start: Date(), battery: LidControl.batteryPercent)
+            } else {
+                thawStrays()
+                finishAwaySummary()
+            }
         }
         // Tell the failsafe daemon what we've done (only written on change).
         Heartbeat.write(lidClosed: closed, savedBrightness: defaults.object(forKey: "savedBrightness") as? Float)
-        offerFailsafeIfNeeded(away: nowAway)
+        offerFailsafeIfNeeded(away: nowAway || locked)
 
         // 5. Pause / resume the other apps. Only while away: otherwise the user
         //    may click any app at any moment.
-        let shouldPause = shouldAssert && pauseOthers && nowAway
+        let freezing = decision.keepAwake && pauseOthers && nowAway
         // Apps an AI is running inside (terminal, editor, T3…) are never frozen.
-        let aiHosts = Self.ancestors(of: currentLeases.map(\.owner).filter { $0 > 0 })
+        let owners = currentLeases.map(\.owner).filter { $0 > 0 }
+        let aiHosts = Self.ancestors(of: owners)
         let working = aiWorking
 
         // Quit apps the AI launched / close tabs it opened, once it's done.
         let requestedApps = Set(currentLeases.compactMap(\.app).map { $0.lowercased() })
         // `testCleanupWithLidOpen` lets tests exercise cleanup without closing the lid.
-        let cleanupLid = nowAway || defaults.bool(forKey: "testCleanupWithLidOpen")
-        let cleaningUp = cleanup.update(requested: requestedApps, lidClosed: cleanupLid) { want in
+        let cleanupAway = nowAway || defaults.bool(forKey: "testCleanupWithLidOpen")
+        let cleaningUp = cleanup.update(requested: requestedApps, lidClosed: cleanupAway) { want in
             running.first { Self.matches($0, want) }
         }
         let frontmost = NSWorkspace.shared.frontmostApplication?.processIdentifier
@@ -601,46 +687,68 @@ final class Model: ObservableObject {
             if let previous = lastFrontmost { leftFrontAt[previous] = Date() }
             lastFrontmost = frontmost
         }
-        for app in running {
-            let pid = app.processIdentifier
-            // Apps the user clicked are left alone until they've been in the
-            // background for a minute.
-            if userResumed.contains(pid), pid != frontmost,
-               let left = leftFrontAt[pid], left.timeIntervalSinceNow < -60 {
-                userResumed.remove(pid)
-            }
-            let needed: Bool
-            switch mode(of: app.bundleIdentifier!) {
-            case .always: needed = true
-            case .whileAI: needed = working || isRequested(app)
-            // A dev build an AI just launched to test (Xcode, `swift build`,
-            // /tmp…) stays awake while an AI works, then freezes like the rest.
-            case .onDemand: needed = isRequested(app) || (working && Policy.isDevBuild(app.bundleURL))
-            }
-            let userIsUsingIt = userPresent && (pid == frontmost || userResumed.contains(pid))
-            // Never freeze an app that is still starting up: frozen mid-launch it
-            // finishes launching (and grabs focus) whenever it's next woken.
-            let starting = !app.isFinishedLaunching
-                || (app.launchDate.map { $0.timeIntervalSinceNow > -15 } ?? false)
-            if !shouldPause || needed || userIsUsingIt || starting || cleaningUp.contains(pid) || aiHosts.contains(pid) {
-                resume(pid: pid)
-            } else {
-                pause(pid: pid)
+        if !freezing {
+            for pid in pausedPIDs { resume(pid: pid) }
+        } else {
+            let input = Decision.FreezeInput(freezing: true, aiWorking: working, userPresent: userPresent,
+                                             frontmost: frontmost, userResumed: userResumed,
+                                             keepAwake: cleaningUp.union(aiHosts))
+            // Other apps have their own mode, and an AI's processes are never frozen with an app.
+            let notHelpers = Set(running.map(\.processIdentifier)).union(aiHosts).union(owners)
+            var table: ProcessTable?
+            for app in running {
+                let pid = app.processIdentifier
+                // Apps the user clicked are left alone until they've been in the
+                // background for a minute.
+                if userResumed.contains(pid), pid != frontmost,
+                   let left = leftFrontAt[pid], left.timeIntervalSinceNow < -60 {
+                    userResumed.remove(pid)
+                }
+                let mode = mode(of: app.bundleIdentifier!)
+                let facts = Decision.App(
+                    pid: pid, mode: mode, requested: isRequested(app),
+                    isDevBuild: mode == .onDemand && working && Policy.isDevBuild(app.bundleURL),
+                    starting: !app.isFinishedLaunching || (app.launchDate.map { $0.timeIntervalSinceNow > -15 } ?? false))
+                if Decision.shouldFreeze(facts, input) {
+                    pause(pid: pid) {
+                        if table == nil { table = ProcessTable.current() }
+                        return table!.helpers(of: pid, excluding: notHelpers)
+                    }
+                } else {
+                    resume(pid: pid)
+                }
             }
         }
         FrozenList.write(running.filter { pausedPIDs.contains($0.processIdentifier) })
 
-        // 5. Refresh the list for the UI.
-        let entries = running.map {
-            AppEntry(
-                id: $0.processIdentifier,
-                bundleID: $0.bundleIdentifier!,
-                name: $0.localizedName ?? $0.bundleIdentifier!,
-                icon: $0.icon,
-                isPaused: pausedPIDs.contains($0.processIdentifier)
-            )
-        }.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+        if nowAway, awayTracker != nil {
+            let agents = currentLeases.filter(\.isWork).compactMap { Integration.agentName(ofLease: $0.name) }
+            let stop: String? = overheated ? "it got too hot"
+                : (manual || !currentLeases.isEmpty) && presence.lidAway && lidClosedMode && lidHelperInstalled && lowBattery
+                    ? "the battery fell below \(batteryCutoff)%" : nil
+            awayTracker?.record(at: Date(), keepingAwake: decision.keepAwake, agents: agents,
+                                otherRequests: currentLeases.contains { $0.isWork && Integration.agentName(ofLease: $0.name) == nil },
+                                frozen: pausedPIDs.count, stoppedBecause: stop)
+        }
+
+        // 6. Refresh the list for the UI.
+        var entries: [AppEntry] = []
+        for app in running {
+            let pid = app.processIdentifier
+            let icon = iconCache[pid] ?? app.icon
+            if iconCache[pid] == nil, let icon { iconCache[pid] = icon }
+            entries.append(AppEntry(id: pid, bundleID: app.bundleIdentifier!, name: app.localizedName ?? app.bundleIdentifier!,
+                                    icon: icon, isPaused: pausedPIDs.contains(pid)))
+        }
+        entries.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         if entries != apps { apps = entries }
+    }
+
+    private func finishAwaySummary() {
+        defer { awayTracker = nil }
+        guard let summary = awayTracker?.finish(at: Date(), battery: LidControl.batteryPercent) else { return }
+        awaySummary = summary
+        EventLog.write("back at the Mac: \(summary.text)" + (summary.stoppedBecause.map { "; stopped early: \($0)" } ?? ""))
     }
 
     /// One line describing whether (and why) we're keeping the Mac awake.
@@ -681,12 +789,13 @@ final class Model: ObservableObject {
         apply()
     }
 
-    private func pause(pid: pid_t) {
+    /// Freezes an app, then its helpers (looked up only once the app is
+    /// stopped, so it can't start new ones in between).
+    private func pause(pid: pid_t, helpers: () -> [pid_t]) {
         guard Signals.isSafeTarget(pid), !pausedPIDs.contains(pid) else { return }
-        // Stop the app first so it can't spawn new helpers, then its helpers.
         guard Signals.send(SIGSTOP, to: pid) else { return }
         pausedPIDs.insert(pid)
-        let children = Self.descendants(of: pid)
+        let children = helpers()
         for child in children { Signals.send(SIGSTOP, to: child) }
         pausedChildren[pid] = children
     }
@@ -702,10 +811,13 @@ final class Model: ObservableObject {
     /// SIGCONT every regular app (and its helpers) that is stopped but not in
     /// our own paused set, e.g. left over from a previous Maben Awake instance.
     private func thawStrays() {
-        for app in runningApps() {
+        let apps = runningApps(fresh: true)
+        let table = ProcessTable.current()
+        let appPIDs = Set(apps.map(\.processIdentifier))
+        for app in apps {
             let pid = app.processIdentifier
             guard !pausedPIDs.contains(pid) else { continue }
-            for p in [pid] + Self.descendants(of: pid) where Self.isStopped(p) { Signals.send(SIGCONT, to: p) }
+            for p in [pid] + table.helpers(of: pid, excluding: appPIDs) where Self.isStopped(p) { Signals.send(SIGCONT, to: p) }
         }
     }
 
@@ -729,18 +841,6 @@ final class Model: ObservableObject {
             }
         }
         return result
-    }
-
-    /// All child processes of `pid`, recursively.
-    private static func descendants(of pid: pid_t) -> [pid_t] {
-        // `UInt32(pid)` traps on a negative pid, and launchd's children are
-        // every process on the Mac.
-        guard Signals.isSafeTarget(pid) else { return [] }
-        var buffer = [pid_t](repeating: 0, count: 1024)
-        let bytes = proc_listpids(UInt32(PROC_PPID_ONLY), UInt32(pid), &buffer, Int32(buffer.count * MemoryLayout<pid_t>.size))
-        guard bytes > 0 else { return [] }
-        let children = buffer.prefix(Int(bytes) / MemoryLayout<pid_t>.size).filter { Signals.isSafeTarget($0) && $0 != pid }
-        return children + children.flatMap { descendants(of: $0) }
     }
 
     /// Offer the failsafe once per failsafe version to anyone using lid-closed
