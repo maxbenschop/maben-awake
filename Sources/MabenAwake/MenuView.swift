@@ -27,10 +27,15 @@ struct MenuView: View {
                 }
                 .padding(.horizontal, 14)
                 .padding(.vertical, 12)
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: ListHeightKey.self, value: geo.size.height)
+                })
             }
             // A ScrollView has no ideal height in a MenuBarExtra window and
-            // collapses to zero, so size it to its content explicitly.
+            // collapses to zero, so give it the height of what's in it: the
+            // list only scrolls once it's taller than the maximum.
             .frame(height: listHeight)
+            .onPreferenceChange(ListHeightKey.self) { measured = $0 }
 
             Divider()
 
@@ -53,11 +58,23 @@ struct MenuView: View {
     /// Only tick the countdowns while it's on screen.
     @State private var visible = false
 
+    /// Height of the list's content, measured; 0 until it has been laid out.
+    @State private var measured: CGFloat = 0
+
     private var listHeight: CGFloat {
-        let leases = model.leases.isEmpty ? 0 : 26 + CGFloat(model.leases.count) * 30
-        let apps = 26 + CGFloat(max(model.apps.count, 1)) * 30
-        return min(leases + apps + 24, 400)
+        // Before the first measurement: a close estimate, so the window doesn't open empty.
+        let estimate = (model.leases.isEmpty ? 0 : 38 + CGFloat(model.leases.count) * 30)
+            + 24 + CGFloat(max(model.apps.count, 1)) * 30 + 24
+        return min((measured > 0 ? measured : estimate).rounded(.up), Self.maxListHeight)
     }
+
+    /// Taller than this, the list scrolls.
+    static let maxListHeight: CGFloat = 400
+}
+
+private struct ListHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) { value = max(value, nextValue()) }
 }
 
 /// MenuBarExtra grows its window when the content gets taller but never

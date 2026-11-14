@@ -136,6 +136,11 @@ enum Snapshot {
             window.orderOut(nil)
         }
         print("Snapshots written to \(dir.path)")
+        if !scrollProblems.isEmpty {
+            print("The menu's list doesn't fit its box, so it scrolls a little:")
+            scrollProblems.forEach { print("  \($0)") }
+            exit(1)
+        }
         exit(0)
     }
 
@@ -156,6 +161,23 @@ enum Snapshot {
         let cli = home.appendingPathComponent(".local/bin/awake").path
         Integration.cliCandidates = [cli]
         try? fm.createSymbolicLink(atPath: cli, withDestinationPath: Integration.cliTarget)
+    }
+
+    private static var scrollProblems: [String] = []
+
+    /// The menu's list only scrolls once it hits its maximum height; below
+    /// that its box must be exactly as tall as what's in it.
+    private static func checkNothingScrolls(in view: NSView, _ name: String) {
+        func scrollViews(_ v: NSView) -> [NSScrollView] {
+            (v as? NSScrollView).map { [$0] } ?? v.subviews.flatMap(scrollViews)
+        }
+        for scroll in scrollViews(view) {
+            guard let content = scroll.documentView?.frame.height else { continue }
+            let box = scroll.contentSize.height
+            if abs(content - box) > 0.5 && box < MenuView.maxListHeight {
+                scrollProblems.append("\(name): list is \(content) pt tall in a \(box) pt box")
+            }
+        }
     }
 
     private static func render<V: View>(_ view: V, _ name: String, _ appearance: NSAppearance.Name,
@@ -184,6 +206,7 @@ enum Snapshot {
         container.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date() + 0.3)
         container.layoutSubtreeIfNeeded()
+        if menu { checkNothingScrolls(in: container, name) }
         guard let rep = container.bitmapImageRepForCachingDisplay(in: container.bounds) else { return }
         container.cacheDisplay(in: container.bounds, to: rep)
         try? rep.representation(using: .png, properties: [:])?.write(to: dir.appendingPathComponent(name + ".png"))

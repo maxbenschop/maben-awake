@@ -3,6 +3,10 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
+## 1.7.1 · not released yet
+
+- The menu no longer scrolls a tiny bit when everything in it fits.
+
 ## 1.7 · 14 November 2026
 
 - Uses much less CPU: with the lid open and the menu closed, Maben Awake no longer checks every app every 3 seconds or redraws the closed menu every second.

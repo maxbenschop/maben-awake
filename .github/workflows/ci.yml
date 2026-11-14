@@ -30,7 +30,8 @@ jobs:
       - name: Hook tests (every agent's events)
         run: python3 tests/agent-hooks-test.py .build/debug/MabenAwakeHook
       - name: UI renders (menu and every Settings page)
-        # Starts the app's real views with canned data. A release that crashes as it draws never gets merged.
+        # Starts the app's real views with canned data. A release that crashes as it draws never gets merged,
+        # and it fails if the menu's list doesn't fit its box (it would scroll a little).
         run: |
           .build/debug/MabenAwake --snapshot "$RUNNER_TEMP/snaps"
           count=$(ls "$RUNNER_TEMP/snaps"/*.png | wc -l)
