@@ -26,6 +26,8 @@ targets:
         buildPhase: resources
       - path: build/AppIcon.icns
         buildPhase: resources
+      - path: build/icon/Assets.car
+        buildPhase: resources
       - path: CHANGELOG.md
         buildPhase: resources
     settings:

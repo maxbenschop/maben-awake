@@ -3,8 +3,9 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
-## 1.7.1 · not released yet
+## 1.7.1 · 19 November 2026
 
+- The app icon keeps its colour with the Dark icon style on macOS 26 and later (it showed as a black square): a green mark on black in Dark, and its own tinted and clear versions.
 - The menu no longer scrolls a tiny bit when everything in it fits.
 
 ## 1.7 · 14 November 2026
