@@ -6,7 +6,7 @@ import SystemConfiguration
 
 // Maben Awake failsafe.
 //
-// A tiny root daemon (/Library/LaunchDaemons/gg.maben.awake.failsafe.plist)
+// A tiny root daemon (/Library/LaunchDaemons/gg.maben.awake.lid-failsafe.plist)
 // that makes sure opening the lid always brings the Mac back, even when
 // Maben Awake itself is stuck. With the lid closed Maben Awake turns the screen
 // brightness to 0 and freezes apps; it undoes both when it sees the lid open.
@@ -28,8 +28,10 @@ import SystemConfiguration
 //   maben-awake-failsafe --version
 
 /// Bump when the daemon's behaviour changes; Maben Awake offers to update an
-/// installed failsafe whose version differs from the bundled one.
-let version = "2"
+/// installed failsafe whose version differs from the bundled one. 3: the
+/// daemon has a new label and its plist names the app, so Login Items shows
+/// "Maben Awake" instead of the developer's name.
+let version = "3"
 let agentLabel = "gg.maben.awake.agent"
 let checkAfter: TimeInterval = 6
 let restartAfter: TimeInterval = 16

@@ -6,11 +6,19 @@
 #   install-failsafe.sh <path to maben-awake-failsafe>   install or update
 #   install-failsafe.sh --uninstall                       remove
 set -e
-LABEL=gg.maben.awake.failsafe
+LABEL=gg.maben.awake.lid-failsafe
 BIN=/Library/PrivilegedHelperTools/$LABEL
 PLIST=/Library/LaunchDaemons/$LABEL.plist
 
 /bin/launchctl bootout "system/$LABEL" 2>/dev/null || true
+
+# Failsafe 2 and earlier, under the label gg.maben.awake.failsafe. Its plist
+# didn't name the app, so Login Items listed it under the developer's name, and
+# macOS keeps that grouping for a label it already knows. The new label makes
+# it a new item, which Login Items shows under Maben Awake.
+PREV=gg.maben.awake.failsafe
+/bin/launchctl bootout "system/$PREV" 2>/dev/null || true
+rm -f "/Library/PrivilegedHelperTools/$PREV" "/Library/LaunchDaemons/$PREV.plist"
 
 # What 1.4 and earlier installed under the app's old name: the same daemon and
 # its log, and the rule that lets the user toggle closed-lid sleep.
@@ -40,6 +48,10 @@ SRC="$1"
 mkdir -p /Library/PrivilegedHelperTools
 install -m 0755 -o root -g wheel "$SRC" "$BIN"
 
+# AssociatedBundleIdentifiers makes Login Items in System Settings list the
+# daemon under Maben Awake, with its icon. Without it, macOS lists it under
+# the name on the Developer ID certificate. Both the app's current ID and the
+# one it moves to (Legacy.swift), so a renamed app keeps the link.
 TMP=$(mktemp)
 cat > "$TMP" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -47,6 +59,8 @@ cat > "$TMP" <<PLIST
 <plist version="1.0">
 <dict>
     <key>Label</key><string>$LABEL</string>
+    <key>AssociatedBundleIdentifiers</key>
+    <array><string>com.maxbenschop.sleepwalker</string><string>gg.maben.awake</string></array>
     <key>ProgramArguments</key>
     <array><string>$BIN</string><string>daemon</string></array>
     <key>RunAtLoad</key><true/>
