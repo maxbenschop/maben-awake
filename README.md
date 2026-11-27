@@ -8,7 +8,7 @@ black mark. Website: `awake-site/` in the Maben folder (awake.maben.gg).
 
 The app was called Sleepwalker until 1.5. Since then everything carries the
 Maben Awake name: the executable (`MabenAwake`), the hook (`maben-awake-hook`),
-the launchd labels (`gg.maben.awake.agent`, `gg.maben.awake.failsafe`) and the
+the launchd labels (`gg.maben.awake.agent`, `gg.maben.awake.lid-failsafe`) and the
 lease and log paths. An install of 1.4 or earlier is moved over when 1.5 first
 starts (`Sources/MabenAwake/Legacy.swift`, the only code that still knows the
 old name):
@@ -240,7 +240,7 @@ so a lease can never outlive its expiry even if the tool crashes.
   within seconds and the new instance thaws every frozen app and restores
   the sleep and brightness settings. Quit from the menu stays quit.
 - **Lid-open failsafe** – a small root launch daemon
-  (`/Library/LaunchDaemons/gg.maben.awake.failsafe.plist`) makes
+  (`/Library/LaunchDaemons/gg.maben.awake.lid-failsafe.plist`) makes
   sure opening the lid always brings the Mac back, even if Maben Awake itself
   is stuck. Maben Awake writes its view of the lid to
   `~/Library/Application Support/MabenAwake/heartbeat.json` whenever it
@@ -254,7 +254,7 @@ so a lease can never outlive its expiry even if the tool crashes.
   folder: it copies the app to a folder only root can open, checks the copy's
   signature, and installs from the copy (`RootInstall.swift`). Log: `/Library/Logs/MabenAwake-failsafe.log`
   (recoveries also appear in `awake log`). Check it with
-  `/Library/PrivilegedHelperTools/gg.maben.awake.failsafe status`;
+  `/Library/PrivilegedHelperTools/gg.maben.awake.lid-failsafe status`;
   remove with `sudo Resources/install-failsafe.sh --uninstall`.
 - **Only real processes are signalled** – every freeze/thaw goes through
   `Signals.send`, which refuses pid ≤ 1 and Maben Awake itself. (`kill(-1, …)`

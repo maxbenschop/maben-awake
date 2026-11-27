@@ -153,8 +153,8 @@ case "$1" in
         else
             info "staying awake with the lid closed isn't set up (Settings > Lid & Power)"
         fi
-        FAILSAFE=/Library/PrivilegedHelperTools/gg.maben.awake.failsafe
-        if [ -x "$FAILSAFE" ] && [ -f /Library/LaunchDaemons/gg.maben.awake.failsafe.plist ]; then
+        FAILSAFE=/Library/PrivilegedHelperTools/gg.maben.awake.lid-failsafe
+        if [ -x "$FAILSAFE" ] && [ -f /Library/LaunchDaemons/gg.maben.awake.lid-failsafe.plist ]; then
             have=$("$FAILSAFE" --version 2>/dev/null); want=$("$APP/Contents/MacOS/maben-awake-failsafe" --version 2>/dev/null)
             if [ -z "$want" ] || [ "$have" = "$want" ]; then ok "lid-open failsafe installed"; else warn "lid-open failsafe is version $have, this app has $want (Settings > Lid & Power > Safety)"; fi
         else

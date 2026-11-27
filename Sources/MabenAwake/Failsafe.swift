@@ -6,7 +6,7 @@ import Foundation
 /// `install-failsafe.sh`, which copies the binary to a root-owned location
 /// (see `RootInstall` for how root gets a script and a binary it can trust).
 enum Failsafe {
-    static let label = "gg.maben.awake.failsafe"
+    static let label = "gg.maben.awake.lid-failsafe"
     static let installedBinary = "/Library/PrivilegedHelperTools/\(label)"
     static let daemonPlist = "/Library/LaunchDaemons/\(label).plist"
 

@@ -3,6 +3,10 @@
 Every release of Maben Awake. The newest version is at the top. `release.sh` uses the section for the version it
 builds as the GitHub release notes, the app shows it under About, and awake.maben.gg/changelog is built from this file.
 
+## 1.7.3 · 27 November 2026
+
+- The lid-open failsafe shows up as Maben Awake, with its icon, under Login Items & Extensions in System Settings. Before, it was listed under the developer's name with a blank icon. Maben Awake offers once to update the failsafe, which fixes this.
+
 ## 1.7.2 · 27 November 2026
 
 - Updates are checked more strictly: an update must be signed with Maben's Developer ID and notarized by Apple, and the check runs on the very copy that gets installed, also when installing asks for an administrator password.
