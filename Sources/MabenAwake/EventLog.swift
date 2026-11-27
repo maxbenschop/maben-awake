@@ -19,7 +19,8 @@ enum EventLog {
 
     static func write(_ message: String) {
         let stamp = formatter.string(from: Date())
-        let line = "\(stamp) \(message)\n"
+        // One event, one line, whatever names it carries (`awake log` shows this file to agents too).
+        let line = "\(stamp) \(PlainText.line(message))\n"
         if let handle = try? FileHandle(forWritingTo: url) {
             handle.seekToEndOfFile()
             handle.write(Data(line.utf8))

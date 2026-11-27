@@ -34,10 +34,9 @@ final class AICleanup {
         for key in requested where sessions[key] == nil {
             if let app = find(key), !app.isTerminated {
                 var session = Session(launchedByAI: false, pidBefore: app.processIdentifier)
-                if Self.supportsTabs(app) {
+                if let browser = Self.tabBrowser(app) {
                     session.tabsBefore = []   // filled in asynchronously
-                    let name = app.localizedName ?? ""
-                    Self.tabIDs(app: name) { [weak self] ids in
+                    Self.tabIDs(browser: browser) { [weak self] ids in
                         if let ids { self?.sessions[key]?.tabsBefore = ids } else { self?.sessions[key]?.tabsBefore = nil }
                     }
                 }
@@ -63,10 +62,10 @@ final class AICleanup {
             if session.launchedByAI || relaunched {
                 keepAwake.insert(app.processIdentifier)
                 app.terminate()
-            } else if let before = session.tabsBefore, Self.supportsTabs(app) {
+            } else if let before = session.tabsBefore, let browser = Self.tabBrowser(app) {
                 let pid = app.processIdentifier
                 busy.insert(pid); keepAwake.insert(pid)
-                Self.closeTabs(app: app.localizedName ?? "", except: before) { [weak self] in
+                Self.closeTabs(browser: browser, except: before) { [weak self] in
                     self?.busy.remove(pid)
                     self?.onDone()
                 }
@@ -77,56 +76,79 @@ final class AICleanup {
 
     // MARK: Browser scripting
 
-    /// Chromium-style browsers whose AppleScript has `id of every tab of every window`.
-    private static let tabBrowsers: Set<String> = [
-        "company.thebrowser.dia", "company.thebrowser.browser", "com.google.chrome",
-        "com.brave.browser", "com.microsoft.edgemac", "com.vivaldi.vivaldi",
+    /// Chromium-style browsers whose AppleScript has `id of every tab of every window`,
+    /// by bundle ID. Scripts address a browser by the ID written here and never
+    /// by its name: the name is whatever the app calls itself, and would be
+    /// script text chosen by that app.
+    nonisolated static let tabBrowsers = [
+        "company.thebrowser.dia", "company.thebrowser.Browser", "com.google.Chrome",
+        "com.brave.Browser", "com.microsoft.edgemac", "com.vivaldi.Vivaldi",
     ]
 
-    private static func supportsTabs(_ app: NSRunningApplication) -> Bool {
-        tabBrowsers.contains(app.bundleIdentifier?.lowercased() ?? "")
+    /// The entry of `tabBrowsers` that `app` is, if any.
+    private static func tabBrowser(_ app: NSRunningApplication) -> String? {
+        guard let id = app.bundleIdentifier?.lowercased() else { return nil }
+        return tabBrowsers.first { $0.lowercased() == id }
     }
 
-    private static func tabIDs(app: String, completion: @escaping @MainActor (Set<String>?) -> Void) {
-        runOsascript("tell application \"\(app)\" to get id of every tab of every window") { output in
-            completion(output.map { Set($0.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }) })
+    nonisolated static func tabIDsScript(browser: String) -> String {
+        "tell application id \(AppleScript.string(browser)) to get id of every tab of every window"
+    }
+
+    /// The tab IDs in what the browser answered, or nil if any of it isn't an
+    /// ID. The answer comes from another app and the IDs go back into a script,
+    /// so only what these browsers use is taken: a number, or letters, digits
+    /// and hyphens (a UUID).
+    nonisolated static func parseTabIDs(_ output: String) -> Set<String>? {
+        let ids = output.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+        let valid = ids.allSatisfy { id in
+            id.count <= 64 && id.unicodeScalars.allSatisfy { $0.isASCII && (CharacterSet.alphanumerics.contains($0) || $0 == "-") }
         }
+        return valid ? Set(ids) : nil
     }
 
-    private static func closeTabs(app: String, except keep: Set<String>, completion: @escaping @MainActor () -> Void) {
-        tabIDs(app: app) { current in
+    private static func tabIDs(browser: String, completion: @escaping @MainActor (Set<String>?) -> Void) {
+        runOsascript(tabIDsScript(browser: browser)) { output in completion(output.flatMap(parseTabIDs)) }
+    }
+
+    /// Closes the tabs `extra` (IDs from `parseTabIDs`) in `browser` (one of `tabBrowsers`).
+    /// Per window: if every tab is the AI's, close the window. Otherwise
+    /// first focus one of the user's tabs (closing the active tab would
+    /// leave a blank one behind), then close the AI's tabs.
+    nonisolated static func closeTabsScript(browser: String, extra: Set<String>) -> String {
+        let list = extra.sorted().map(AppleScript.string).joined(separator: ", ")
+        return """
+        tell application id \(AppleScript.string(browser))
+          set extra to {\(list)}
+          repeat with wid in (get id of every window)
+            set w to (first window whose id is (wid as text))
+            set tabIDs to {}
+            repeat with t in (get id of every tab of w)
+              set end of tabIDs to (t as text)
+            end repeat
+            set keepIDs to {}
+            repeat with t in tabIDs
+              if extra does not contain (t as text) then set end of keepIDs to (t as text)
+            end repeat
+            if (count of keepIDs) is 0 then
+              close w
+            else
+              if extra contains ((id of active tab of w) as text) then focus (first tab of w whose id is (item 1 of keepIDs))
+              repeat with t in tabIDs
+                if extra contains (t as text) then close (first tab of w whose id is (t as text))
+              end repeat
+            end if
+          end repeat
+        end tell
+        """
+    }
+
+    private static func closeTabs(browser: String, except keep: Set<String>, completion: @escaping @MainActor () -> Void) {
+        tabIDs(browser: browser) { current in
             guard let current else { completion(); return }
             let extra = current.subtracting(keep)
             guard !extra.isEmpty else { completion(); return }
-            let list = extra.map { "\"\($0)\"" }.joined(separator: ", ")
-            // Per window: if every tab is the AI's, close the window. Otherwise
-            // first focus one of the user's tabs (closing the active tab would
-            // leave a blank one behind), then close the AI's tabs.
-            let script = """
-            tell application "\(app)"
-              set extra to {\(list)}
-              repeat with wid in (get id of every window)
-                set w to (first window whose id is (wid as text))
-                set tabIDs to {}
-                repeat with t in (get id of every tab of w)
-                  set end of tabIDs to (t as text)
-                end repeat
-                set keepIDs to {}
-                repeat with t in tabIDs
-                  if extra does not contain (t as text) then set end of keepIDs to (t as text)
-                end repeat
-                if (count of keepIDs) is 0 then
-                  close w
-                else
-                  if extra contains ((id of active tab of w) as text) then focus (first tab of w whose id is (item 1 of keepIDs))
-                  repeat with t in tabIDs
-                    if extra contains (t as text) then close (first tab of w whose id is (t as text))
-                  end repeat
-                end if
-              end repeat
-            end tell
-            """
-            runOsascript(script) { _ in completion() }
+            runOsascript(closeTabsScript(browser: browser, extra: extra)) { _ in completion() }
         }
     }
 

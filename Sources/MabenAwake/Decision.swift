@@ -71,6 +71,36 @@ enum Decision {
         return Power(keepAwake: keepAwake, blockLidSleep: blockLid, lidLine: lidLine, keepScreenOn: screenOn)
     }
 
+    // MARK: Event log
+
+    /// The event log's line about staying awake, and what to add to it. The
+    /// line says whether the Mac is kept awake and on whose account: the
+    /// user's own setting, or AI requests when that is all there is. The
+    /// requests themselves go in `detail`, which is written along with the
+    /// line but is no reason to write it again: an agent's every turn and
+    /// tool call adds and removes one, and that filled 94% of the log.
+    static func awakeLine(overheated: Bool, manual: String?, keepAwakeSwitch: Bool, requests: [String]) -> (line: String, detail: String?) {
+        if overheated { return ("not keeping awake: too hot with the lid closed", nil) }
+        let names = requests.isEmpty ? nil : listed(requests)
+        if let manual { return ("keeping awake (\(manual))", names.map { "AI requests: " + $0 }) }
+        if !requests.isEmpty { return ("keeping awake (AI requests)", names) }
+        return (keepAwakeSwitch ? "not keeping awake: no Always on app running, no AI requests"
+                                : "not keeping awake: switched off, no AI requests", nil)
+    }
+
+    /// Up to six names, and how many more there are.
+    static func listed(_ names: [String]) -> String {
+        let sorted = names.sorted()
+        return sorted.prefix(6).joined(separator: ", ") + (sorted.count > 6 ? " and \(sorted.count - 6) more" : "")
+    }
+
+    /// Lines for the requests that hold the Mac awake with nobody working
+    /// (`Lease.holdsWhileIdle`), as they start and end.
+    static func requestLines(before: Set<String>, now: Set<String>) -> [String] {
+        now.subtracting(before).sorted().map { "request started: " + $0 }
+            + before.subtracting(now).sorted().map { "request ended: " + $0 }
+    }
+
     // MARK: Freezing
 
     /// What `Model` knows about one running app.

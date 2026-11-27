@@ -51,13 +51,17 @@ The app updates itself from GitHub Releases (`Sources/MabenAwake/Updater.swift`)
 2. If its tag `vX.Y.Z` is newer, the menu bar icon turns green and the menu and Settings › General show an
    Update button. With "Install updates automatically" on (default), it installs by itself once the lid is
    open and no agent is working.
-3. It downloads `Maben-Awake.zip` from that release, and only installs it if the app inside is signed with
-   the Developer ID of team NJTYRVLSA8 with this bundle ID, accepted by Gatekeeper (notarized), and has the
-   announced version. The old app is kept in `~/Library/Application Support/MabenAwake/Previous version/`
-   (one version, nothing in the Trash).
+3. It downloads `Maben-Awake.zip` from that release (only from this repository's releases on github.com),
+   and only installs it if the app inside is signed with the Developer ID of team NJTYRVLSA8 with this bundle
+   ID, notarized by Apple, accepted by Gatekeeper, and has the announced version. The check runs again on the
+   copy that actually goes in, which is placed next to the app and then swapped with it. If installing needs
+   an administrator password, root makes that copy in a folder only root can open and checks it itself. The
+   old app is kept in `~/Library/Application Support/MabenAwake/Previous version/` (one version, nothing in
+   the Trash).
 4. It wakes every frozen app, restores sleep and brightness, and restarts as the new version.
 5. If the new version then starts 4 times within 3 minutes without running for a minute or quitting cleanly,
-   it puts the kept version back and restarts as that (`CrashGuard.swift`). The version that was rolled back
+   it puts the kept version back and restarts as that (`CrashGuard.swift`), if the kept copy still passes the
+   same signature and notarization check and is an earlier version. The version that was rolled back
    isn't installed automatically again; the next newer one is. This only protects updates installed by 1.7
    or later, since 1.6 and earlier don't keep the old version.
 
@@ -246,7 +250,9 @@ so a lease can never outlive its expiry even if the tool crashes.
   hasn't reported in after 16 seconds, it restarts it. Being root, nothing in
   your login session can freeze it. Installed with the lid-closed setup, or
   later from Settings → Lid & Power → Safety (Maben Awake offers it once when
-  it's missing or outdated). Log: `/Library/Logs/MabenAwake-failsafe.log`
+  it's missing or outdated). Root never runs anything straight from the app's
+  folder: it copies the app to a folder only root can open, checks the copy's
+  signature, and installs from the copy (`RootInstall.swift`). Log: `/Library/Logs/MabenAwake-failsafe.log`
   (recoveries also appear in `awake log`). Check it with
   `/Library/PrivilegedHelperTools/gg.maben.awake.failsafe status`;
   remove with `sudo Resources/install-failsafe.sh --uninstall`.
@@ -266,8 +272,9 @@ so a lease can never outlive its expiry even if the tool crashes.
   it back on (logged as "re-enabled by another app").
 - **Event log** – `~/Library/Logs/MabenAwake.log` (or `awake log`) records
   every decision: when and why the Mac is kept awake (which Always on app,
-  which AI requests), lid and power changes, whether closed-lid sleep is
-  blocked and why not, and a snapshot of the state at every sleep and wake.
+  which AI requests), a cron, wake-up or background task as it starts and
+  ends, lid and power changes, whether closed-lid sleep is blocked and why
+  not, and a snapshot of the state at every sleep and wake.
   Compare with `awake sleeplog` to explain an unexpected sleep.
 - **Never frozen by default** – terminals and editors (where agents run),
   AI apps, calls (Zoom, FaceTime, Teams, Discord, Meet), audio (Music,

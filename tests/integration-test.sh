@@ -6,10 +6,9 @@ cd "$(dirname "$0")/.."
 T=$(mktemp -d)
 trap 'rm -rf "$T"' EXIT
 mkdir -p "$T/src" "$T/home/.claude" "$T/home/.claude-work" "$T/home/.claude-plain" "$T/bin" "$T/App.app/Contents/Resources" "$T/App.app/Contents/MacOS"
-cp Sources/MabenAwake/Integration.swift "$T/src/"
+cp Sources/MabenAwake/Integration.swift Sources/MabenAwake/AdminShell.swift "$T/src/"
 cat > "$T/src/main.swift" <<'SWIFT'
 import Foundation
-enum Failsafe { static func shellQuote(_ s: String) -> String { "'" + s + "'" } }
 enum Legacy { static let hookName = "sleepwalker-hook" }
 let a = CommandLine.arguments
 Integration.home = URL(fileURLWithPath: a[1])
@@ -193,6 +192,57 @@ try Integration.removeHooks(); try Integration.remove(cursor); try Integration.r
 check("the old hook name is removed too", Integration.hooksStatus == .missing && !text(".qwen/settings.json").contains("sleepwalker-hook"))
 Integration.bundle = realBundle
 
+// Files are written whole and keep the permissions they had; a link is replaced by the file, never written through.
+let fm = FileManager.default
+func mode(_ p: String) -> Int { (try? fm.attributesOfItem(atPath: a[1] + "/" + p)[.posixPermissions] as? Int) ?? -1 }
+func isLink(_ p: String) -> Bool { (try? fm.destinationOfSymbolicLink(atPath: a[1] + "/" + p)) != nil }
+let qwen = Integration.agent("qwen"), gemini = Integration.agent("gemini")
+try? fm.removeItem(atPath: a[1] + "/.qwen/settings.json.before-maben-awake")
+put(".qwen/settings.json", #"{ "apiKey": "secret" }"#)
+try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: a[1] + "/.qwen/settings.json")
+try Integration.install(qwen)
+check("a private settings file stays private, and so does the copy kept of it", Integration.status(of: qwen) == .installed
+      && mode(".qwen/settings.json") == 0o600 && mode(".qwen/settings.json.before-maben-awake") == 0o600
+      && json(".qwen/settings.json")["apiKey"] as? String == "secret" && text(".qwen/settings.json.before-maben-awake") == #"{ "apiKey": "secret" }"#)
+check("nothing temporary is left next to it", (try fm.contentsOfDirectory(atPath: a[1] + "/.qwen")).sorted() == ["settings.json", "settings.json.before-maben-awake"])
+try Integration.remove(qwen)
+check("still private after removing", mode(".qwen/settings.json") == 0o600 && json(".qwen/settings.json")["apiKey"] as? String == "secret")
+
+try? fm.removeItem(atPath: a[1] + "/.gemini/settings.json"); try? fm.removeItem(atPath: a[1] + "/.gemini/settings.json.before-maben-awake")
+put("dotfiles/gemini.json", #"{ "theme": "light" }"#)
+try fm.setAttributes([.posixPermissions: 0o600], ofItemAtPath: a[1] + "/dotfiles/gemini.json")
+try fm.createSymbolicLink(atPath: a[1] + "/.gemini/settings.json", withDestinationPath: a[1] + "/dotfiles/gemini.json")
+try Integration.install(gemini)
+check("a settings file that is a link is replaced by a file, not written through", !isLink(".gemini/settings.json")
+      && Integration.status(of: gemini) == .installed && json(".gemini/settings.json")["theme"] as? String == "light"
+      && text("dotfiles/gemini.json") == #"{ "theme": "light" }"#)
+check("the new file has the permissions of the file the link pointed at", mode(".gemini/settings.json") == 0o600)
+check("the copy kept of it is what the link pointed at, as a file", !isLink(".gemini/settings.json.before-maben-awake")
+      && text(".gemini/settings.json.before-maben-awake") == #"{ "theme": "light" }"# && mode(".gemini/settings.json.before-maben-awake") == 0o600)
+try Integration.remove(gemini)
+
+// The hook's path is shell text in every agent's file: a path that would mean something to a shell is refused.
+put(".claude/settings.json", #"{ "model": "opus" }"#)
+for (n, name) in ["Bad $(touch pwned).app", "Bad `id`.app", "Bad \"x\".app", "Bad \\ x.app", "Bad\nline.app"].enumerated() {
+    Integration.bundle = URL(fileURLWithPath: a[1] + "/Applications/" + name)
+    var refused = 0
+    do { try Integration.installHooks() } catch { refused += 1; if n == 0 { print("     (message: \(error.localizedDescription))") } }
+    do { try Integration.install(cursor) } catch { refused += 1 }
+    do { try Integration.install(Integration.agent("opencode")) } catch { refused += 1 }
+    check("an app path with shell characters is refused (\(n + 1))", refused == 3 && text(".claude/settings.json") == #"{ "model": "opus" }"#
+          && Integration.status(of: cursor) == .missing && !exists(".config/opencode/plugins/maben-awake.js"))
+}
+Integration.bundle = URL(fileURLWithPath: a[1] + "/Applications/It's Maben & Awake (2).app")
+try Integration.installHooks()
+check("a path with spaces, an apostrophe and brackets is fine inside the quotes", commands(".claude/settings.json", "Stop") == ["\"" + Integration.hookPath + "\""])
+let quoted = commands(".claude/settings.json", "Stop")[0]
+let echo = Process(); let pipe = Pipe()
+echo.executableURL = URL(fileURLWithPath: "/bin/sh"); echo.arguments = ["-c", "printf '%s' " + quoted]; echo.standardOutput = pipe
+try echo.run(); echo.waitUntilExit()
+check("and a shell reads it back as that one path", String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self) == Integration.hookPath)
+try Integration.removeHooks()
+Integration.bundle = realBundle
+
 check("cli missing", Integration.cliStatus == .missing)
 let sem = DispatchSemaphore(value: 0)
 Integration.installCLI { ok in check("cli installed without a password in a writable folder", ok && Integration.cliStatus == .installed); sem.signal() }
@@ -224,5 +274,5 @@ cat > "$T/home/.claude-work/settings.json" <<JSON
 JSON
 echo '{ "theme": "dark" }' > "$T/home/.claude-plain/settings.json"
 touch "$T/App.app/Contents/Resources/awake"
-swiftc -O -o "$T/test" "$T/src/Integration.swift" "$T/src/main.swift" 2>&1 | grep -v "warning" || true
+swiftc -O -o "$T/test" "$T/src/Integration.swift" "$T/src/AdminShell.swift" "$T/src/main.swift" 2>&1 | grep -v "warning" || true
 "$T/test" "$T/home" "$T/App.app" "$T/bin"

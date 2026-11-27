@@ -53,7 +53,7 @@ enum Snapshot {
         } catch {
             print("REJECTED: \((error as? Updater.Failure)?.message ?? "\(error)")")
         }
-        let sample = #"{"tag_name":"v1.4.1","draft":false,"prerelease":false,"html_url":"https://github.com/x/y/releases/tag/v1.4.1","body":"- Fix","assets":[{"name":"Maben-Awake.dmg","browser_download_url":"https://e/a.dmg"},{"name":"Maben-Awake.zip","browser_download_url":"https://e/a.zip"}]}"#
+        let sample = #"{"tag_name":"v1.4.1","draft":false,"prerelease":false,"html_url":"https://github.com/maxbenschop/maben-awake/releases/tag/v1.4.1","body":"- Fix","assets":[{"name":"Maben-Awake.dmg","browser_download_url":"https://github.com/maxbenschop/maben-awake/releases/download/v1.4.1/Maben-Awake.dmg"},{"name":"Maben-Awake.zip","browser_download_url":"https://github.com/maxbenschop/maben-awake/releases/download/v1.4.1/Maben-Awake.zip"}]}"#
         let r = Updater.parse(Data(sample.utf8))
         print("parse:", r?.version ?? "nil", r?.zip.absoluteString ?? "", "newer than 1.4:", Updater.isNewer(r?.version ?? "0", than: "1.4"))
         print("prerelease ignored:", Updater.parse(Data(sample.replacingOccurrences(of: #""prerelease":false"#, with: #""prerelease":true"#).utf8)) == nil)

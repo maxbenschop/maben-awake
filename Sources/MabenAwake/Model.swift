@@ -187,6 +187,10 @@ final class Model: ObservableObject {
     private var loggedScreen: String?
     private var loggedLidState: String?
     private var loggedPower: String?
+    /// The long-lived requests (`Lease.holdsWhileIdle`) the log knows about.
+    private var loggedHolds = Set<String>()
+    /// A look at the requests is on its way (see `leasesChanged`).
+    private var leaseCheckPending = false
     /// Set after a failed `pmset` call so a broken helper doesn't flood the log.
     private var lidSetFailed = false
     private var timer: Timer?
@@ -286,11 +290,12 @@ final class Model: ObservableObject {
         term.resume()
         termSource = term
 
-        // React to AI requests instantly instead of waiting for the next poll.
+        // React to AI requests at once instead of waiting for the next poll.
+        LeaseStore.sweep()
         let fd = open(LeaseStore.directory.path, O_EVTONLY)
         if fd >= 0 {
             let source = DispatchSource.makeFileSystemObjectSource(fileDescriptor: fd, eventMask: .write, queue: .main)
-            source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.apply() } }
+            source.setEventHandler { [weak self] in MainActor.assumeIsolated { self?.leasesChanged() } }
             source.setCancelHandler { close(fd) }
             source.resume()
             leaseWatcher = source
@@ -536,6 +541,20 @@ final class Model: ObservableObject {
         return list
     }
 
+    /// The requests folder changed. One hook call adds and removes several
+    /// files within a few milliseconds, and each is an event: look once,
+    /// when they have settled, instead of running `apply()` for every one.
+    private func leasesChanged() {
+        guard !leaseCheckPending else { return }
+        leaseCheckPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.leaseCheckPending = false
+                self?.apply()
+            }
+        }
+    }
+
     private func apply() {
         guard !isPreview else { return }
         let currentLeases = LeaseStore.active()
@@ -587,7 +606,14 @@ final class Model: ObservableObject {
             lidClosedMode: lidClosedMode, lidHelperInstalled: lidHelperInstalled, lowBattery: lowBattery,
             batteryCutoff: batteryCutoff, lidAway: presence.lidAway, keepUnlockedWhenClosed: keepUnlockedWhenClosed))
         decision.keepAwake ? acquireAssertion() : releaseAssertion()
-        logChange(&loggedAwake, awakeDecision(running: running, manual: manual, leases: currentLeases))
+        let awake = Decision.awakeLine(overheated: overheated, manual: manual ? manualReason(running: running) : nil,
+                                       keepAwakeSwitch: keepAwake, requests: currentLeases.map { PlainText.name($0.name) })
+        logChange(&loggedAwake, awake.line, detail: awake.detail)
+        let holds = Set(currentLeases.filter(\.holdsWhileIdle).map { PlainText.name($0.name) })
+        if holds != loggedHolds {
+            Decision.requestLines(before: loggedHolds, now: holds).forEach(EventLog.write)
+            loggedHolds = holds
+        }
 
         // 2. Closed-lid sleep: only blocked while we're keeping the Mac awake,
         //    and never on a nearly empty battery.
@@ -751,18 +777,11 @@ final class Model: ObservableObject {
         EventLog.write("back at the Mac: \(summary.text)" + (summary.stoppedBecause.map { "; stopped early: \($0)" } ?? ""))
     }
 
-    /// One line describing whether (and why) we're keeping the Mac awake.
-    private func awakeDecision(running: [NSRunningApplication], manual: Bool, leases: [Lease]) -> String {
-        if overheated { return "not keeping awake: too hot with the lid closed" }
-        var reasons: [String] = []
-        if manual {
-            let names = running.filter { checked.contains($0.bundleIdentifier!) }.compactMap(\.localizedName)
-            reasons.append(onlyWhileCheckedRunning ? "Always on: \(names.joined(separator: ", "))" : "kept awake manually")
-        }
-        if !leases.isEmpty { reasons.append("AI requests: \(leases.map(\.name).sorted().joined(separator: ", "))") }
-        if !reasons.isEmpty { return "keeping awake (\(reasons.joined(separator: "; ")))" }
-        if !keepAwake { return "not keeping awake: switched off, no AI requests" }
-        return "not keeping awake: no Always on app running, no AI requests"
+    /// Why the user's own setting keeps the Mac awake, for the event log.
+    private func manualReason(running: [NSRunningApplication]) -> String {
+        guard onlyWhileCheckedRunning else { return "kept awake manually" }
+        let names = running.filter { checked.contains($0.bundleIdentifier!) }.compactMap(\.localizedName).map(PlainText.name)
+        return "Always on: \(names.joined(separator: ", "))"
     }
 
     /// Writes `line` to the event log when it differs from the last one logged
@@ -778,7 +797,7 @@ final class Model: ObservableObject {
         guard !isPreview else { return }
         EventLog.write("\(event): keeping awake=\(isAsserting), closed-lid sleep blocked=\(LidControl.isSleepDisabled), "
             + "lid \(LidControl.isLidClosed ? "closed" : "open"), \(LidControl.powerDescription), "
-            + "\(leases.count) AI requests, \(pausedPIDs.count) apps frozen")
+            + "\(leases.count) AI requests\(leases.isEmpty ? "" : " (" + Decision.listed(leases.map { PlainText.name($0.name) }) + ")"), \(pausedPIDs.count) apps frozen")
     }
 
     private func userActivated(_ app: NSRunningApplication) {

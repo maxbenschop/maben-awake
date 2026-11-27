@@ -263,4 +263,61 @@ final class LeaseTests: XCTestCase {
         XCTAssertFalse(lease("claude-3f2a-wakeup").isWork)
         XCTAssertFalse(lease("need-Dia-1", app: "Dia").isWork)
     }
+
+    func testWhatHoldsTheMacWithNobodyWorking() {
+        func lease(_ name: String, app: String? = nil) -> Lease { Lease(name: name, expires: .distantFuture, app: app, owner: 0) }
+        XCTAssertTrue(lease("claude-3f2a-cron").holdsWhileIdle)
+        XCTAssertTrue(lease("claude-3f2a-wakeup").holdsWhileIdle)
+        XCTAssertTrue(lease("claude-3f2a-bg").holdsWhileIdle)
+        XCTAssertFalse(lease("claude-3f2a").holdsWhileIdle, "a turn")
+        XCTAssertFalse(lease("need-Dia-1", app: "Dia").holdsWhileIdle, "an app request")
+    }
+
+    func testATemporaryFileIsNotARequest() {
+        // What a sandboxed atomic write leaves next to `claude-57ac6bb3` until it is renamed.
+        XCTAssertFalse(LeaseStore.isLease(fileName: "claude-57ac6bb3.sb-752ff954-FDAfbm"))
+        XCTAssertFalse(LeaseStore.isLease(fileName: "need-com.apple.Notes-812.sb-0a1b2c3d-J4Gbzg"))
+        XCTAssertFalse(LeaseStore.isLease(fileName: ".hint-claude-57ac6bb3"), "the hook's own notes")
+        XCTAssertFalse(LeaseStore.isLease(fileName: ".new-812-claude-57ac6bb3"))
+        XCTAssertTrue(LeaseStore.isLease(fileName: "claude-57ac6bb3"))
+        XCTAssertTrue(LeaseStore.isLease(fileName: "claude-57ac6bb3-bg"))
+        XCTAssertTrue(LeaseStore.isLease(fileName: "need-com.sb-apps.editor-812"), "an app whose ID happens to contain .sb-")
+        XCTAssertTrue(LeaseStore.isLease(fileName: "nightly.sb-backup"), "a name someone chose for `awake hold`")
+    }
+}
+
+final class EventLogTests: XCTestCase {
+    func testRequestsComingAndGoingDontChangeTheLine() {
+        let one = Decision.awakeLine(overheated: false, manual: "Always on: Autopost", keepAwakeSwitch: true, requests: ["claude-e695afb8"])
+        let two = Decision.awakeLine(overheated: false, manual: "Always on: Autopost", keepAwakeSwitch: true,
+                                     requests: ["claude-e695afb8", "claude-9eb0f264", "need-docker-30229"])
+        let none = Decision.awakeLine(overheated: false, manual: "Always on: Autopost", keepAwakeSwitch: true, requests: [])
+        XCTAssertEqual(one.line, "keeping awake (Always on: Autopost)")
+        XCTAssertEqual(two.line, one.line)
+        XCTAssertEqual(none.line, one.line)
+        XCTAssertEqual(two.detail, "AI requests: claude-9eb0f264, claude-e695afb8, need-docker-30229")
+        XCTAssertNil(none.detail)
+    }
+
+    func testTheLineChangesWhenTheReasonDoes() {
+        let requests = Decision.awakeLine(overheated: false, manual: nil, keepAwakeSwitch: false, requests: ["codex-11aa22bb"])
+        XCTAssertEqual(requests.line, "keeping awake (AI requests)")
+        XCTAssertEqual(requests.detail, "codex-11aa22bb")
+        XCTAssertEqual(Decision.awakeLine(overheated: false, manual: nil, keepAwakeSwitch: false, requests: []).line,
+                       "not keeping awake: switched off, no AI requests")
+        XCTAssertEqual(Decision.awakeLine(overheated: false, manual: nil, keepAwakeSwitch: true, requests: []).line,
+                       "not keeping awake: no Always on app running, no AI requests")
+        XCTAssertEqual(Decision.awakeLine(overheated: true, manual: "kept awake manually", keepAwakeSwitch: true, requests: ["a"]).line,
+                       "not keeping awake: too hot with the lid closed")
+    }
+
+    func testALongListIsCutShort() {
+        XCTAssertEqual(Decision.listed((1...9).map { "s\($0)" }), "s1, s2, s3, s4, s5, s6 and 3 more")
+    }
+
+    func testLongLivedRequestsAreNamedAsTheyStartAndEnd() {
+        XCTAssertEqual(Decision.requestLines(before: ["claude-1-cron"], now: ["claude-1-cron", "claude-2-bg"]), ["request started: claude-2-bg"])
+        XCTAssertEqual(Decision.requestLines(before: ["claude-1-cron", "claude-2-bg"], now: ["claude-2-bg"]), ["request ended: claude-1-cron"])
+        XCTAssertEqual(Decision.requestLines(before: ["a"], now: ["a"]), [])
+    }
 }

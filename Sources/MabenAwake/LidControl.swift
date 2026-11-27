@@ -13,16 +13,15 @@ enum LidControl {
 
     static var isHelperInstalled: Bool { sudoersFiles.contains { FileManager.default.fileExists(atPath: $0) } }
 
-    /// Asks for the admin password once and installs the sudoers rule.
+    /// Asks for the admin password once and installs the sudoers rule, from a
+    /// copy of the app that root has checked (`RootInstall`).
     @discardableResult
     static func installHelper() -> Bool {
-        guard let script = Bundle.main.path(forResource: "install-lid-helper", ofType: "sh") else { return false }
-        var cmd = "\(shellQuote(script)) \(shellQuote(NSUserName()))"
+        guard Bundle.main.path(forResource: "install-lid-helper", ofType: "sh") != nil else { return false }
         // Install the lid-open failsafe in the same password prompt.
-        if let failsafe = Failsafe.installCommand { cmd += " && { " + failsafe + " || true; }" }
-        let source = "do shell script \"\(cmd.replacingOccurrences(of: "\"", with: "\\\""))\" with administrator privileges"
+        let command = RootInstall.commandForRunningApp(.lidHelper(user: NSUserName(), failsafe: Failsafe.canInstall))
         var error: NSDictionary?
-        NSAppleScript(source: source)?.executeAndReturnError(&error)
+        NSAppleScript(source: AdminShell.source(command))?.executeAndReturnError(&error)
         return error == nil && isHelperInstalled
     }
 
@@ -147,9 +146,5 @@ enum LidControl {
         let types: [CGEventType] = [.mouseMoved, .leftMouseDown, .rightMouseDown, .otherMouseDown,
                                     .keyDown, .scrollWheel, .flagsChanged]
         return types.map { CGEventSource.secondsSinceLastEventType(.combinedSessionState, eventType: $0) }.min() ?? 0
-    }
-
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 }

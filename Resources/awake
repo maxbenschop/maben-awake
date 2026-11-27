@@ -22,6 +22,9 @@ mkdir -p "$DIR"
 
 safe() { printf '%s' "$1" | tr -c 'A-Za-z0-9._-' '_'; }
 say() { [ -n "$AWAKE_QUIET" ] || echo "awake: $*"; }
+# A name read from a file (a request's name or app, a frozen app's name, a folder) before it is printed: no
+# control characters, at most 60 characters. AI agents read this output, and a name must stay a name.
+clean() { printf '%s' "$1" | tr -d '\000-\037\177' | cut -c1-60; }
 
 # The agent process we're running under (0 if none), so holds die with it.
 # Agents installed with npm run as `node <path>/<agent>`.
@@ -81,13 +84,16 @@ case "$1" in
         now=$(date +%s)
         for f in "$DIR"/*; do
             [ -f "$f" ] || continue
-            read -r exp _ app < "$f"; left=$(( (exp - now) / 60 ))
-            [ "$left" -ge 0 ] && echo "$(basename "$f")  ${left} min left${app:+  (app: $app)}"
+            read -r exp _ app < "$f" || true
+            # Only a number is an expiry time: anything else must never reach the arithmetic below.
+            case "$exp" in ''|*[!0-9]*) continue ;; esac
+            left=$(( (exp - now) / 60 ))
+            [ "$left" -ge 0 ] && echo "$(clean "$(basename "$f")")  ${left} min left${app:+  (app: $(clean "$app"))}"
         done
         # Apps frozen right now (written by the app; the first line is its pid).
         FROZEN="${MABEN_AWAKE_FROZEN:-$(dirname "$DIR")/frozen}"
         if [ -f "$FROZEN" ]; then
-            apps=$(grep -v '^pid ' "$FROZEN" | cut -f2 | paste -sd ',' - | sed 's/,/, /g')
+            apps=$(grep -v '^pid ' "$FROZEN" | cut -f2 | tr -d '\000-\011\013-\037\177' | cut -c1-60 | paste -sd ',' - | sed 's/,/, /g')
             [ -n "$apps" ] && echo "frozen: $apps"
         fi; true ;;
     log)
@@ -114,7 +120,7 @@ case "$1" in
         AGENT="$HOME/Library/LaunchAgents/gg.maben.awake.agent.plist"
         if [ -f "$AGENT" ] && launchctl print "gui/$(id -u)/gg.maben.awake.agent" >/dev/null 2>&1; then
             target=$(/usr/libexec/PlistBuddy -c 'Print :ProgramArguments:0' "$AGENT" 2>/dev/null)
-            case "$target" in "$APP"/*) ok "starts at login and after a crash" ;; *) warn "the launch agent starts another copy: $target" ;; esac
+            case "$target" in "$APP"/*) ok "starts at login and after a crash" ;; *) warn "the launch agent starts another copy: $(printf '%s' "$target" | tr -d '\000-\037\177' | cut -c1-200)" ;; esac
         else
             warn "doesn't start at login or restart after a crash (Settings > General > Open at login)"
         fi
@@ -137,7 +143,7 @@ case "$1" in
         # Other Claude Code config folders (CLAUDE_CONFIG_DIR=~/.claude-work…) that have the hooks.
         for file in "$HOME"/.claude-*/settings.json; do
             [ -f "$file" ] || continue
-            folder=$(basename "$(dirname "$file")")
+            folder=$(clean "$(basename "$(dirname "$file")")")
             if grep -q "$HOOK" "$file"; then ok "Claude Code connected in ~/$folder"; connected=$((connected + 1))
             elif grep -qE "maben-awake-hook|sleepwalker-hook" "$file"; then warn "Claude Code in ~/$folder points at another copy of the app (Settings > Agents > Update)"; fi
         done
