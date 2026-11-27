@@ -1,6 +1,5 @@
 import AppKit
 import Combine
-import Security
 
 /// Updates from GitHub Releases (github.com/maxbenschop/maben-awake).
 ///
@@ -13,11 +12,13 @@ import Security
 /// 3. Verify before touching anything: the app inside must be signed with the
 ///    Developer ID of team NJTYRVLSA8 with this bundle ID, notarized by Apple
 ///    (Gatekeeper accepts it), and newer than the running version.
-/// 4. Install: keep a copy of the running app (`CrashGuard.backup`), replace the app
-///    in place (asking for an administrator password only if the app folder isn't
-///    writable), wake every frozen app and restore sleep and brightness, then
-///    restart. launchd starts the new version within seconds. If it keeps crashing,
-///    `CrashGuard` puts the kept copy back.
+/// 4. Install: keep a copy of the running app (`CrashGuard.backup`), copy the new
+///    app next to the old one, verify that copy again (it is the one that goes
+///    in), and swap the two. Only if the app folder isn't writable does it ask
+///    for an administrator password, and then root makes its own copy and
+///    checks that. Then wake every frozen app, restore sleep and brightness,
+///    and restart. launchd starts the new version within seconds. If it keeps
+///    crashing, `CrashGuard` puts the kept copy back.
 ///
 /// Automatic installs only happen while the lid is open and no agent is working,
 /// so an update never interrupts a job.
@@ -80,6 +81,7 @@ final class Updater: ObservableObject {
 
     /// Call once at launch.
     func start() {
+        if canInstall { Self.removeLeftovers(beside: Bundle.main.bundleURL) }
         schedule()
         if autoCheck {
             DispatchQueue.main.asyncAfter(deadline: .now() + 20) { [weak self] in self?.check(userInitiated: false) }
@@ -150,10 +152,32 @@ final class Updater: ObservableObject {
               let assets = json["assets"] as? [[String: Any]],
               let asset = assets.first(where: { ($0["name"] as? String) == assetName }),
               let zip = (asset["browser_download_url"] as? String).flatMap(URL.init(string:)),
-              let page = (json["html_url"] as? String).flatMap(URL.init(string:))
+              isOnGitHub(zip), zip.path.hasPrefix("/\(repository)/releases/download/")
         else { return nil }
         let version = tag.hasPrefix("v") ? String(tag.dropFirst()) : tag
+        // The page is opened in the browser, so it is this repository's own releases page unless GitHub names another of its pages.
+        let page = (json["html_url"] as? String).flatMap(URL.init(string:)).flatMap { isOnGitHub($0) ? $0 : nil } ?? releasesPage
         return Release(version: version, notes: (json["body"] as? String) ?? "", zip: zip, page: page)
+    }
+
+    nonisolated static let releasesPage = URL(string: "https://github.com/\(repository)/releases")!
+
+    /// An `https://github.com/…` address. What the feed says is only data: the app
+    /// downloads from and opens nothing else, whatever the answer contains.
+    nonisolated static func isOnGitHub(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "https" && url.host?.lowercased() == "github.com"
+            && url.user == nil && (url.port ?? 443) == 443 && !url.pathComponents.contains("..")
+    }
+
+    /// The release notes for display. They come from the network, so a link in
+    /// them only works when it is `https`; any other link is shown as plain text.
+    nonisolated static func notesText(_ notes: String) -> AttributedString {
+        guard var text = try? AttributedString(markdown: notes, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
+        else { return AttributedString(notes) }
+        for run in text.runs {
+            if let link = run.link, link.scheme?.lowercased() != "https" { text[run.range].link = nil }
+        }
+        return text
     }
 
     /// Numeric comparison of dotted versions: 1.10 > 1.9, 1.4.1 > 1.4.
@@ -229,11 +253,12 @@ final class Updater: ObservableObject {
             guard Self.run("/usr/bin/ditto", ["-x", "-k", zip.path, work.path]) == 0 else { throw Failure("Couldn't unpack the update.") }
             guard let newApp = try fm.contentsOfDirectory(at: work, includingPropertiesForKeys: nil).first(where: { $0.pathExtension == "app" })
             else { throw Failure("The update doesn't contain an app.") }
+            // Checked here first, so a bad download never gets as far as a password prompt.
             try Self.verify(newApp, expectedVersion: release.version)
             let target = await MainActor.run { Bundle.main.bundleURL }
             // Kept so a release that keeps crashing can be rolled back (CrashGuard).
             CrashGuard.keepBackup(of: target)
-            try Self.replace(target, with: newApp)
+            try Self.replace(target, with: newApp, version: release.version) { try Self.verify($0, expectedVersion: release.version) }
             try? fm.removeItem(at: work)
             await MainActor.run { self.relaunch(version: release.version) }
         } catch {
@@ -255,62 +280,129 @@ final class Updater: ObservableObject {
         return ids
     }
 
-    /// The downloaded app must be ours, notarized, and the version we expect.
+    /// What an update or an earlier version must be, as a code requirement: signed
+    /// with a Developer ID (not a development or App Store certificate) of our
+    /// team, under one of our bundle IDs, and notarized by Apple, whatever this
+    /// Mac's Gatekeeper setting is. The one text for the check in this process
+    /// and for the check root runs on its own copy.
+    nonisolated static func requirement(identifiers: [String] = acceptedIdentifiers) -> String {
+        "anchor apple generic and certificate 1[field.1.2.840.113635.100.6.2.6] exists"
+            + " and certificate leaf[field.1.2.840.113635.100.6.1.13] exists"
+            + " and certificate leaf[subject.OU] = \"\(teamID)\""
+            + " and \(CodeSignature.identifiers(identifiers)) and notarized"
+    }
+
+    /// The app must be ours, notarized, and the version we expect.
     nonisolated static func verify(_ app: URL, expectedVersion: String) throws {
-        var code: SecStaticCode?
-        guard SecStaticCodeCreateWithPath(app as CFURL, [], &code) == errSecSuccess, let code else {
-            throw Failure("The update isn't a valid app.")
+        guard CodeSignature.satisfies(app, requirement()) else {
+            throw Failure("The update isn't signed by Maben and notarized by Apple. It was not installed.")
         }
-        let ids = acceptedIdentifiers.map { "identifier \"\($0)\"" }.joined(separator: " or ")
-        let text = "anchor apple generic and (\(ids)) and certificate leaf[subject.OU] = \"\(teamID)\""
-        var requirement: SecRequirement?
-        guard SecRequirementCreateWithString(text as CFString, [], &requirement) == errSecSuccess, let requirement else {
-            throw Failure("Couldn't check the update's signature.")
-        }
-        let flags = SecCSFlags(rawValue: kSecCSCheckAllArchitectures | kSecCSStrictValidate | kSecCSCheckNestedCode)
-        guard SecStaticCodeCheckValidity(code, flags, requirement) == errSecSuccess else {
-            throw Failure("The update isn't signed by Maben. It was not installed.")
-        }
-        // Notarized: Gatekeeper accepts it as a downloaded app.
+        // Gatekeeper's own answer as well: it also knows what Apple has revoked.
         guard run("/usr/sbin/spctl", ["--assess", "--type", "execute", app.path]) == 0 else {
             throw Failure("The update isn't notarized by Apple. It was not installed.")
         }
-        let info = NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))
-        guard (info?["CFBundleShortVersionString"] as? String) == expectedVersion else {
+        guard CrashGuard.version(of: app) == expectedVersion else {
             throw Failure("The update's version doesn't match the release.")
         }
     }
 
-    /// Swaps the app bundle. The old copy is kept in Application Support (one
-    /// version only, see `CrashGuard`), not in the Trash, so updates don't pile up there.
-    nonisolated static func replace(_ target: URL, with newApp: URL, askForPassword: Bool = true) throws {
+    /// Hidden names beside the app while it is swapped: the copy going in, and the app going out.
+    nonisolated static let stagedName = ".Maben Awake.update.app"
+    nonisolated static let oldName = ".Maben Awake.old.app"
+
+    /// Puts `newApp` (which has `version`) in place of `target`. `check` runs on
+    /// the copy that goes in and throws if it may not. The old app is kept in
+    /// Application Support (one version only, see `CrashGuard`), not in the
+    /// Trash, so updates don't pile up there.
+    nonisolated static func replace(_ target: URL, with newApp: URL, version: String, askForPassword: Bool = true,
+                                    check: (URL) throws -> Void) throws {
         let fm = FileManager.default
         if fm.isWritableFile(atPath: target.deletingLastPathComponent().path) && fm.isWritableFile(atPath: target.path) {
-            let aside = target.deletingLastPathComponent().appendingPathComponent(".Maben Awake.old.app")
-            try? fm.removeItem(at: aside)
-            do {
-                try fm.moveItem(at: target, to: aside)
-            } catch {
-                throw Failure("Couldn't install the update: \(error.localizedDescription)")
-            }
-            do {
-                try fm.copyItem(at: newApp, to: target)
-            } catch {
-                try? fm.removeItem(at: target)
-                try? fm.moveItem(at: aside, to: target)   // put the old one back
-                throw Failure("Couldn't install the update: \(error.localizedDescription)")
-            }
-            try? fm.removeItem(at: aside)
+            try swap(target, with: newApp, check: check)
         } else if !askForPassword {
             throw Failure("The app folder isn't writable without an administrator password.")
         } else {
-            // Installed by an administrator: ask for the password once.
-            let q = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
-            let staged = target.deletingLastPathComponent().appendingPathComponent(".Maben Awake.update.app").path
-            let command = "/bin/rm -rf \(q(staged)) && /usr/bin/ditto \(q(newApp.path)) \(q(staged)) && /bin/rm -rf \(q(target.path)) && /bin/mv \(q(staged)) \(q(target.path))"
-            let script = "do shell script \"\(command.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" with prompt \"Maben Awake wants to install an update.\" with administrator privileges"
-            guard run("/usr/bin/osascript", ["-e", script]) == 0 else { throw Failure("The update was not installed (no administrator password).") }
+            // Installed by an administrator: ask for the password once. Root copies, checks and swaps (`rootInstallCommand`).
+            let command = rootInstallCommand(newApp: newApp.path, target: target.path, requirement: requirement(),
+                                             version: version, token: UUID().uuidString)
+            switch AdminShell.runAndWait(command, prompt: "Maben Awake wants to install an update.") {
+            case .done: break
+            case .cancelled: throw Failure("The update was not installed (no administrator password).")
+            case .failed: throw Failure("The update was not installed: it couldn't be copied or didn't pass the checks.")
+            }
         }
+    }
+
+    /// Swaps the app in a folder we can write to. The new app is first copied
+    /// next to the old one and `check` runs on that copy: what was checked is
+    /// what goes in, whatever happens to `newApp` meanwhile. Then two renames,
+    /// and if the second fails the old app goes back, so the app is never
+    /// missing after a failure. (`move` is only replaced by the tests.)
+    nonisolated static func swap(_ target: URL, with newApp: URL, check: (URL) throws -> Void,
+                                 move: (URL, URL) throws -> Void = { try FileManager.default.moveItem(at: $0, to: $1) }) throws {
+        let fm = FileManager.default
+        let folder = target.deletingLastPathComponent()
+        let staged = folder.appendingPathComponent(stagedName), old = folder.appendingPathComponent(oldName)
+        func failure(_ error: Error) -> Failure {
+            try? fm.removeItem(at: staged)
+            return (error as? Failure) ?? Failure("Couldn't install the update: \(error.localizedDescription)")
+        }
+        try? fm.removeItem(at: staged)   // left by a swap that was cut short
+        do {
+            try fm.copyItem(at: newApp, to: staged)
+            try check(staged)
+        } catch {
+            throw failure(error)
+        }
+        try? fm.removeItem(at: old)
+        do { try move(target, old) } catch { throw failure(error) }
+        do {
+            try move(staged, target)
+        } catch {
+            try? move(old, target)   // put the old one back
+            throw failure(error)
+        }
+        try? fm.removeItem(at: old)
+    }
+
+    /// A swap that was cut short (power loss, force quit) leaves a hidden copy beside the app.
+    nonisolated static func removeLeftovers(beside target: URL) {
+        for name in [stagedName, oldName] {
+            try? FileManager.default.removeItem(at: target.deletingLastPathComponent().appendingPathComponent(name))
+        }
+    }
+
+    /// The shell command root runs to install an update where the app folder
+    /// isn't writable. What this process checked proves nothing to root: the
+    /// download is in a folder the user's other processes can write to. So root
+    /// copies it into a folder of its own next to the app (mode 700 from the
+    /// moment it exists, so nobody else can reach inside), checks that copy
+    /// (signature, Gatekeeper, version) and swaps it in with two renames. Any
+    /// failure removes the folder and leaves the app as it was.
+    /// `token` makes the folder's name; it must be new every time.
+    nonisolated static func rootInstallCommand(newApp: String, target: String, requirement: String, version: String, token: String) -> String {
+        let q = AdminShell.quote
+        let folder = (target as NSString).deletingLastPathComponent
+        return [
+            "T=\(q(target))",
+            "D=\(q(folder + "/.Maben Awake.update." + token))",
+            #"S="$D/Maben Awake.app""#,
+            #"fail() { /bin/rm -rf "$D"; exit 1; }"#,
+            // Not `fail`: a folder that was already there isn't ours to remove.
+            #"/bin/mkdir -m 700 "$D" || exit 1"#,
+            #"/usr/bin/ditto \#(q(newApp)) "$S" || fail"#,
+            // The new app belongs to whoever owned the old one, and brings no set-user-ID bit of its own making.
+            #"/usr/sbin/chown -R "$(/usr/bin/stat -f %u:%g "$T")" "$S" || fail"#,
+            #"/bin/chmod -R ug-s "$S" || fail"#,
+            #"/usr/bin/codesign --verify --deep --strict -R=\#(q(requirement)) "$S" || fail"#,
+            #"/usr/sbin/spctl --assess --type execute "$S" || fail"#,
+            #"[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$S/Contents/Info.plist")" = \#(q(version)) ] || fail"#,
+            #"/bin/mv "$T" "$D/old.app" || fail"#,
+            // If the old app can't go back either, it stays in the folder: never `fail` with the only copy in there.
+            #"/bin/mv "$S" "$T" || { /bin/mv "$D/old.app" "$T" || exit 1; fail; }"#,
+            #"/bin/rm -rf "$D""#,
+            "exit 0",
+        ].joined(separator: "\n")
     }
 
     /// Restores everything, then restarts as the new version.

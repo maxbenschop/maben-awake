@@ -145,8 +145,7 @@ private struct ReleaseNotes: View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Maben Awake \(release.version)").font(.system(size: 13, weight: .semibold))
             ScrollView {
-                Text((try? AttributedString(markdown: release.notes, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)))
-                     ?? AttributedString(release.notes))
+                Text(Updater.notesText(release.notes))
                     .font(.system(size: 12))
                     .frame(maxWidth: .infinity, alignment: .leading)
             }

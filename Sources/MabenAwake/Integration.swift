@@ -32,6 +32,18 @@ enum Integration {
 
     static var hookPath: String { bundle.appendingPathComponent("Contents/MacOS/maben-awake-hook").path }
     private static var hookCommand: String { "\"\(hookPath)\"" }
+
+    /// The hook's path goes into commands that each agent hands to a shell, in
+    /// double quotes. A path with a character that means something there (a
+    /// quote, a backslash, `$`, a backtick, a line break) is refused instead of
+    /// escaped: the app's own folder never has one, and no escaping is right
+    /// for every agent's file and shell.
+    private static func checkHookPath() throws {
+        let special = CharacterSet(charactersIn: "\"\\$`").union(.controlCharacters).union(.newlines)
+        if hookPath.unicodeScalars.contains(where: special.contains) {
+            throw Failure(message: "Maben Awake is in a folder whose name has a character that can't go in a hook (\", \\, $ or `). Move it to Applications and try again.")
+        }
+    }
     /// PostToolUseFailure (1.6): a failed command is where the hook tells the agent which apps are frozen.
     private static let hookEvents = ["UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "SessionEnd"]
     /// The hook's file name, now and before 1.5.
@@ -106,6 +118,7 @@ enum Integration {
     /// Everything else in those files is kept. Returns the files written.
     @discardableResult
     static func installHooks() throws -> [URL] {
+        try checkHookPath()
         let main = home.appendingPathComponent(".claude/settings.json")
         let targets = [main] + hookedSettingsFiles.filter { $0 != main }
         for url in targets {
@@ -170,14 +183,45 @@ enum Integration {
         let fm = FileManager.default
         do {
             try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-            // One copy of the file as it was before this app first touched it.
+            // One copy of the file as it was before this app first touched it: its contents, also when the file is a link.
             let backup = url.appendingPathExtension("before-maben-awake")
-            if fm.fileExists(atPath: url.path), !fm.fileExists(atPath: backup.path) { try? fm.copyItem(at: url, to: backup) }
+            if !fm.fileExists(atPath: backup.path), let original = try? Data(contentsOf: url) {
+                try? replace(backup, with: original, permissions: permissions(of: url))
+            }
             var data = try JSONSerialization.data(withJSONObject: settings, options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
             data.append(0x0A)
-            try data.write(to: url, options: .atomic)
+            try replace(url, with: data, permissions: permissions(of: url))
         } catch {
             throw Failure(message: "Couldn't write \(tilde(url)): \(error.localizedDescription)")
+        }
+    }
+
+    /// The permissions of the file at `url` (of the file a link points at), nil if there is none.
+    private static func permissions(of url: URL) -> mode_t? {
+        var info = stat()
+        return stat(url.path, &info) == 0 ? info.st_mode & 0o7777 : nil
+    }
+
+    /// Writes a file in one step: the whole new file under another name, then a
+    /// rename over the old one, so an agent never reads half a file. The new
+    /// file has `permissions` from the moment it exists (a settings file that
+    /// only its owner may read stays that way), or the usual ones for a new file.
+    /// A link at `url` is replaced by the file, never written through.
+    private static func replace(_ url: URL, with data: Data, permissions: mode_t?) throws {
+        let temporary = url.deletingLastPathComponent().appendingPathComponent(".\(url.lastPathComponent).\(UUID().uuidString)")
+        func failure() -> NSError { NSError(domain: NSPOSIXErrorDomain, code: Int(errno)) }
+        let fd = Darwin.open(temporary.path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, permissions ?? 0o666)
+        guard fd >= 0 else { throw failure() }
+        let handle = FileHandle(fileDescriptor: fd, closeOnDealloc: true)
+        do {
+            // Exactly these, whatever the umask.
+            if let permissions, fchmod(fd, permissions) != 0 { throw failure() }
+            try handle.write(contentsOf: data)
+            try handle.close()
+            guard rename(temporary.path, url.path) == 0 else { throw failure() }
+        } catch {
+            try? FileManager.default.removeItem(at: temporary)
+            throw error
         }
     }
 
@@ -300,12 +344,13 @@ enum Integration {
     }
 
     static func install(_ agent: Agent) throws {
+        try checkHookPath()
         try remove(agent)   // also from a file it is no longer read from
         let url = file(of: agent)
         if case .ownFile(let contents) = agent.layout {
             do {
                 try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-                try contents(hookPath).write(to: url, atomically: true, encoding: .utf8)
+                try replace(url, with: Data(contents(hookPath).utf8), permissions: permissions(of: url))
             } catch {
                 throw Failure(message: "Couldn't write \(tilde(url)): \(error.localizedDescription)")
             }
@@ -492,7 +537,7 @@ enum Integration {
             }
         }
         let link = "/usr/local/bin/awake"
-        runAsAdmin("/bin/mkdir -p /usr/local/bin && /bin/ln -sf \(Failsafe.shellQuote(cliTarget)) \(Failsafe.shellQuote(link))",
+        runAsAdmin("/bin/mkdir -p /usr/local/bin && /bin/ln -sf \(AdminShell.quote(cliTarget)) \(AdminShell.quote(link))",
                    prompt: "Maben Awake wants to add the awake command to /usr/local/bin.") { ok in
             completion(ok && cliStatus == .installed)
         }
@@ -508,26 +553,15 @@ enum Integration {
             if (try? fm.removeItem(atPath: candidate)) == nil { needAdmin.append(candidate) }
         }
         guard !needAdmin.isEmpty else { Task { @MainActor in completion(true) }; return }
-        runAsAdmin("/bin/rm -f " + needAdmin.map(Failsafe.shellQuote).joined(separator: " "),
+        runAsAdmin("/bin/rm -f " + needAdmin.map(AdminShell.quote).joined(separator: " "),
                    prompt: "Maben Awake wants to remove the awake command.") { ok in completion(ok) }
     }
 
-    /// Runs a shell command as root after a password prompt, in a separate
-    /// process so the dialog never blocks the main thread (which watches the lid).
+    /// Runs a shell command as root after a password prompt (`AdminShell`).
     private static func runAsAdmin(_ command: String, prompt: String, completion: @escaping @MainActor (Bool) -> Void) {
-        func quoted(_ s: String) -> String {
-            "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\""
+        AdminShell.run(command, prompt: prompt) { outcome in
+            Task { @MainActor in completion(outcome == .done) }
         }
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", "do shell script \(quoted(command)) with prompt \(quoted(prompt)) with administrator privileges"]
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        p.terminationHandler = { proc in
-            let ok = proc.terminationStatus == 0
-            Task { @MainActor in completion(ok) }
-        }
-        do { try p.run() } catch { Task { @MainActor in completion(false) } }
     }
 
     // MARK: Finder helpers

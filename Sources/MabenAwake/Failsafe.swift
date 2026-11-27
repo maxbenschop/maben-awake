@@ -3,7 +3,8 @@ import Foundation
 /// The lid-open failsafe: a root launch daemon (Sources/MabenAwakeFailsafe)
 /// that unfreezes apps and turns the screen back on when the lid opens, even if
 /// Maben Awake itself is stuck. Installed with one password prompt by
-/// `install-failsafe.sh`, which copies the binary to a root-owned location.
+/// `install-failsafe.sh`, which copies the binary to a root-owned location
+/// (see `RootInstall` for how root gets a script and a binary it can trust).
 enum Failsafe {
     static let label = "gg.maben.awake.failsafe"
     static let installedBinary = "/Library/PrivilegedHelperTools/\(label)"
@@ -42,30 +43,18 @@ enum Failsafe {
         return p.terminationStatus == 0 ? text : nil
     }
 
-    /// Shell command that installs or updates the daemon (run as root).
-    static var installCommand: String? {
-        guard let script = installScript, let binary = bundledBinary else { return nil }
-        return "\(shellQuote(script)) \(shellQuote(binary))"
-    }
+    /// The app has what it takes to install the daemon (a bare `swift build` binary doesn't).
+    static var canInstall: Bool { installScript != nil && bundledBinary != nil }
 
-    /// Asks for the admin password and installs the daemon. Runs `osascript` as
-    /// a separate process so the password dialog never blocks Maben Awake's
-    /// main thread (which has to keep watching the lid).
+    /// Asks for the admin password and installs the daemon, from a copy of the
+    /// app that root has checked (`RootInstall`). The password dialog runs in a
+    /// separate process, so it never blocks Maben Awake's main thread (which
+    /// has to keep watching the lid).
     static func install(completion: @escaping @Sendable (Bool) -> Void) {
-        guard let cmd = installCommand else { completion(false); return }
-        let source = "do shell script \"\(cmd.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\""))\" "
-            + "with prompt \"Maben Awake wants to install its lid-open failsafe, which turns the screen back on and unfreezes apps if Maben Awake ever gets stuck.\" "
-            + "with administrator privileges"
-        let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-        p.arguments = ["-e", source]
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        p.terminationHandler = { proc in completion(proc.terminationStatus == 0 && isUpToDate) }
-        do { try p.run() } catch { completion(false) }
-    }
-
-    static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        guard canInstall else { completion(false); return }
+        AdminShell.run(RootInstall.commandForRunningApp(.failsafe),
+                       prompt: "Maben Awake wants to install its lid-open failsafe, which turns the screen back on and unfreezes apps if Maben Awake ever gets stuck.") { outcome in
+            completion(outcome == .done && isUpToDate)
+        }
     }
 }

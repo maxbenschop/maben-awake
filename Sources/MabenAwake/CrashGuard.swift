@@ -57,6 +57,20 @@ enum CrashGuard {
         NSDictionary(contentsOf: app.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String
     }
 
+    /// What a kept copy must be before it becomes the app again: ours and
+    /// notarized, by the same requirement as an update, and really an earlier
+    /// version than `current`. The copy is kept in a folder that every process
+    /// of the user can write to, so being there proves nothing. (A development
+    /// build is signed ad hoc and therefore never goes back.)
+    nonisolated static func check(_ app: URL, isEarlierThan current: String) throws {
+        guard CodeSignature.satisfies(app, Updater.requirement()) else {
+            throw Updater.Failure("the kept copy isn't signed by Maben and notarized by Apple")
+        }
+        guard let previous = version(of: app), Updater.isNewer(current, than: previous) else {
+            throw Updater.Failure("the kept copy isn't an earlier version")
+        }
+    }
+
     /// Puts the backup in place of the running app and restarts as it.
     private static func rollBack() {
         let current = Bundle.main.bundleURL
@@ -65,7 +79,11 @@ enum CrashGuard {
             return
         }
         do {
-            try Updater.replace(current, with: backup, askForPassword: false)
+            // Checked on the copy that goes in, like an update (`Updater.swap`).
+            let running = version
+            try Updater.replace(current, with: backup, version: previous, askForPassword: false) {
+                try check($0, isEarlierThan: running)
+            }
         } catch {
             EventLog.write("could not go back to version \(previous): \((error as? Updater.Failure)?.message ?? "\(error)")")
             return

@@ -21,6 +21,11 @@ struct Lease: Identifiable, Hashable {
     /// (`-bg`, `-detached`): those keep the Mac awake for hours, but nobody is
     /// working, so apps stay frozen and the menu doesn't say an AI is working.
     var isWork: Bool { app == nil && !["-wakeup", "-cron", "-bg", "-detached"].contains { name.hasSuffix($0) } }
+
+    /// Keeps the Mac awake for hours with nobody working (a wake-up, a cron,
+    /// background work). Few and long-lived, so the event log names each one
+    /// as it starts and ends; turns and app requests come and go all day.
+    var holdsWhileIdle: Bool { app == nil && !isWork }
 }
 
 enum LeaseStore {
@@ -36,7 +41,7 @@ enum LeaseStore {
         let fm = FileManager.default
         guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil) else { return [] }
         var leases: [Lease] = []
-        for file in files where !file.lastPathComponent.hasPrefix(".") {
+        for file in files where isLease(fileName: file.lastPathComponent) {
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { continue }
             let parts = text.split(whereSeparator: \.isWhitespace)
             guard let first = parts.first, let ts = TimeInterval(first) else { continue }
@@ -51,6 +56,35 @@ enum LeaseStore {
             }
         }
         return leases.sorted { $0.name < $1.name }
+    }
+
+    /// Whether a file in the folder is a request. Hidden files are the hook's
+    /// own notes. `<name>.sb-<8 hex digits>-<6 characters>` is the temporary
+    /// file an atomic write leaves next to its target when the writer is
+    /// sandboxed: the hook wrote leases that way before, and each one showed
+    /// up here as a request for a moment, twice per tool call.
+    static func isLease(fileName name: String) -> Bool {
+        guard !name.hasPrefix(".") else { return false }
+        guard let mark = name.range(of: ".sb-", options: .backwards) else { return true }
+        let tail = name[mark.upperBound...].split(separator: "-", omittingEmptySubsequences: false)
+        return !(tail.count == 2 && tail[0].count == 8 && tail[0].allSatisfy(\.isHexDigit) && tail[1].count == 6)
+    }
+
+    /// Once at launch: files nobody will come back for. A temporary file whose
+    /// writer was stopped halfway (older than a minute), and the hook's notes
+    /// about a session that never said it ended (older than a week).
+    static func sweep() {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: directory, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        for file in files {
+            let name = file.lastPathComponent
+            let temporary = name.hasPrefix(".new-") || !(name.hasPrefix(".") || isLease(fileName: name))
+            let note = name.hasPrefix(".hint-") || name.hasPrefix(".apps-")
+            guard temporary || note,
+                  let changed = try? file.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                  -changed.timeIntervalSinceNow > (temporary ? 60 : 7 * 86_400) else { continue }
+            try? fm.removeItem(at: file)
+        }
     }
 
     static func remove(_ lease: Lease) {
@@ -74,12 +108,30 @@ enum FrozenList {
 
     static func write(_ apps: [NSRunningApplication]) {
         let text = "pid \(ProcessInfo.processInfo.processIdentifier)\n" + apps.compactMap { app -> String? in
-            guard let id = app.bundleIdentifier else { return nil }
-            let name = (app.localizedName ?? id).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "\t", with: " ")
-            return id + "\t" + name + "\n"
+            // One app per line: an ID that could start a line of its own is left out.
+            guard let id = app.bundleIdentifier, PlainText.line(id) == id, !id.contains(" ") else { return nil }
+            let name = PlainText.name(app.localizedName ?? id)
+            return name.isEmpty ? nil : id + "\t" + name + "\n"
         }.sorted().joined()
         guard text != written else { return }
         try? text.write(to: file, atomically: true, encoding: .utf8)
         written = text
+    }
+}
+
+/// Text from outside the app (an app's display name, a lease's file name) on
+/// its way to somewhere an AI agent reads it: the frozen list above, and the
+/// event log through `awake log`. A name is whatever its owner made it, so it
+/// is kept to what a name is: one line, no control characters, 60 characters.
+enum PlainText {
+    private static let hidden = CharacterSet.controlCharacters.union(.newlines)
+
+    /// One line without control characters.
+    static func line(_ s: String) -> String {
+        String(String.UnicodeScalarView(s.unicodeScalars.map { hidden.contains($0) ? " " : $0 }))
+    }
+
+    static func name(_ s: String) -> String {
+        String(line(s).split(separator: " ").joined(separator: " ").prefix(60))
     }
 }
